@@ -165,7 +165,6 @@
   <div class="seg" role="group" aria-label="Painting style">
     <button data-style="abstract" aria-pressed="true">Abstract</button>
     <button data-style="watercolour" aria-pressed="false">Landscape</button>
-    <button data-style="ink" aria-pressed="false">Ink</button>
     <button data-style="pixel" aria-pressed="false">Pixel</button>
   </div>
   <button class="btn icon" id="repaint" title="Repaint (new brushstrokes)" aria-label="Repaint">
@@ -199,7 +198,7 @@
   </div>
   <div class="field"><span>Medium</span>
     <div class="seg" data-opt="medium">
-      <button data-v="watercolour">Watercolour</button><button data-v="gouache">Gouache</button><button data-v="oil">Oil</button><button data-v="ink">Ink</button>
+      <button data-v="watercolour">Watercolour</button><button data-v="ink">Ink</button><button data-v="gouache">Gouache</button><button data-v="oil">Oil</button>
     </div>
   </div>
   <div class="field"><span>Palette</span>
@@ -275,6 +274,8 @@ function loadOpts() {
   if (params.has('medium')) o.medium = params.get('medium');
   if (params.has('palette')) o.palette = params.get('palette');
   if (params.has('size')) o.size = +params.get('size');
+  if (params.has('simw')) o.simW = +params.get('simw'); // testing only
+  if (params.has('engine')) o.engine = params.get('engine'); // testing only
   if (params.has('l')) {
     const v = params.get('l').split(',').map(Number);
     Object.keys(DEFAULTS.layers).forEach((k, i) => { if (!isNaN(v[i])) o.layers[k] = v[i]; });
@@ -286,7 +287,10 @@ const app = {
   place: null,           // {name, lat, lon}
   weather: null,         // normalised weather object for stateFromWeather
   state: null,
-  style: params.get('style') || store.get('style') || 'abstract',
+  style: ((s) => (s === 'ink' ? 'abstract' : s))(params.get('style') || store.get('style') || 'abstract'),
+  // A random seed per visitor, so everyone's painting is their own. Shared links carry it.
+  artist: params.get('seed') || store.get('artist') || (() => { const a = Math.random().toString(36).slice(2, 10); store.set('artist', a); return a; })(),
+  live: false,
   series: null,          // hourly weather for the abstract mode
   opts: loadOpts(),
   caption: params.get('caption') !== '0' && store.get('caption') !== false,
@@ -324,8 +328,10 @@ function caption() {
   if (!app.caption || !app.state) return null;
   if (app.style === 'abstract' && app.series) {
     const { text, range } = summarise(app.series);
-    const when = app.opts.range === 1 ? fmtDate(app.series.now) : '';
-    return { title: app.place?.name || 'Somewhere', sub: [when, text, range].filter(Boolean).join('  ·  ') };
+    const w = app.weather, now = app.series.now;
+    const sub = [`Now ${fmtTime(now)}`, app.state.label, w.temp != null ? `${Math.round(w.temp)}°` : ''].filter(Boolean).join('  ·  ');
+    const sub2 = [app.opts.range === 1 ? fmtDate(now) : '', text, range].filter(Boolean).join('  ·  ');
+    return { title: app.place?.name || 'Somewhere', sub, sub2 };
   }
   const s = app.state, w = app.weather;
   const bits = [];
@@ -338,7 +344,7 @@ function caption() {
 function seed() {
   // The abstract painting keeps its seed so earlier hours don't move; the landscape changes daily.
   const day = app.style !== 'abstract' && app.weather ? new Date(app.weather.now).toISOString().slice(0, 10) : '';
-  return hash(`${app.place?.name}|${day}|${app.reroll}`);
+  return hash(`${app.artist}|${app.place?.name}|${day}|${app.reroll}`);
 }
 
 // ------------------------------------------------------------ weather
@@ -390,7 +396,10 @@ async function load(place) {
   try {
     if (app.demo) throw new Error('demo');
     app.weather = await fetchWeather(place.lat, place.lon, app.opts.range);
+    app.live = true;
   } catch (e) {
+    app.live = false;
+    if (!app.demo) console.warn('Weather fetch failed:', e);
     const name = DEMOS[app.demo] ? app.demo : 'rain';
     app.weather = demoWeather(name);
     app.series = demoSeries(app.demo || 'rain', app.opts.range);
@@ -399,7 +408,7 @@ async function load(place) {
   app.state = stateFromWeather(app.weather);
   store.set('place', place);
   rebuild();
-  $('#status').textContent = `${place.name} · ${app.state.label}${app.weather.temp != null ? ` · ${Math.round(app.weather.temp)}°` : ''}`;
+  $('#status').textContent = `${place.name} · ${app.state.label}${app.weather.temp != null ? ` · ${Math.round(app.weather.temp)}°` : ''} · ${app.live ? `live, ${fmtTime(app.weather.now)}` : 'demo weather'}`;
   document.title = `${place.name}: Weatherglaze`;
 }
 
@@ -414,7 +423,12 @@ function resize() {
 
 function rebuild() {
   if (!app.state) return;
-  app.scene = makeScene(cvs.width, cvs.height);
+  if (app.pending) app.pending.cancelled = true;
+  const sc = makeScene(cvs.width, cvs.height);
+  if (!sc.ready || !app.scene || app.scene.kind !== sc.kind) { if (app.scene) app.scene.cancelled = true; app.scene = sc; app.pending = null; return; }
+  // keep the current painting on screen until the new one has finished
+  app.pending = sc;
+  sc.ready.then(() => { if (app.pending === sc && !sc.cancelled) { app.scene = sc; app.pending = null; } });
 }
 
 function makeScene(w, h) {
@@ -428,6 +442,7 @@ function paintAny(c, sc, p, opts) {
   else paint(c, sc, p, { ...opts, style: app.style === 'abstract' ? 'watercolour' : app.style });
 }
 
+window.__sceneDone = () => !!(app.scene && (app.scene.done ?? true) && !app.pending);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 function frame(t) {
   if (app.scene) {
@@ -468,6 +483,7 @@ $('#share').addEventListener('click', async () => {
   u.search = '';
   if (app.place) { u.searchParams.set('lat', app.place.lat.toFixed(3)); u.searchParams.set('lon', app.place.lon.toFixed(3)); u.searchParams.set('name', app.place.name); }
   u.searchParams.set('style', app.style);
+  u.searchParams.set('seed', app.artist);
   if (app.style === 'abstract') {
     const o = app.opts;
     u.searchParams.set('range', o.range);
@@ -613,6 +629,7 @@ $('#dlgForm').addEventListener('submit', async (e) => {
   abort = new AbortController();
   try {
     const sc = makeScene(w, h);
+    if (sc.ready) { go.textContent = 'Painting the layers…'; await sc.ready; go.textContent = 'Painting…'; }
     const cap = caption();
     const draw = (c, p) => paintAny(c, sc, p, { caption: cap, grain: fmt === 'gif' ? 0 : 1 });
     const onProgress = (f) => { $('#bar').style.width = `${Math.round(f * 100)}%`; };
