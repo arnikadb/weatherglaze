@@ -17,12 +17,21 @@
 import { rng } from './sky.js';
 
 export const MEDIA = {
-  watercolour: { flow: 0.2, wetFront: 1.3, fibre: 0.75, slope: 0.6, gravity: 0.28, runAt: 0.6, evap: 0.016, edgeEvap: 3.2, mobility: 1.0, deposit: 0.0012, granulate: 0.035, absorb: 1.25, hide: 0.04, pin: 0.12, redissolve: 0.2, steps: 80 },
-  ink:         { flow: 0.26, wetFront: 0.45, fibre: 1.0, slope: 0.25, gravity: 0.08, runAt: 0.7, evap: 0.016, edgeEvap: 4.0, mobility: 1.0, deposit: 0.0015, granulate: 0.004, absorb: 1.5, hide: 0.0, pin: 0.16, redissolve: 0.75, steps: 70 },
-  gouache:     { flow: 0.12, wetFront: 0.9, fibre: 0.15, slope: 0.2, gravity: 0.0, runAt: 9, evap: 0.026, edgeEvap: 0.15, mobility: 0.55, deposit: 0.02, granulate: 0.0, absorb: 0.7, hide: 2.4, pin: 0, redissolve: 0.35, steps: 45 },
+  watercolour: { flow: 0.2, wetFront: 1.3, fibre: 0.75, slope: 0.6, gravity: 0.28, runAt: 0.6, evap: 0.016, edgeEvap: 3.2, mobility: 1.0, deposit: 0.0012, granulate: 0.035, absorb: 1.25, hide: 0.04, pin: 0.12, redissolve: 0.2, fur: 0.85, steps: 80 },
+  ink:         { flow: 0.3, wetFront: 0.12, fibre: 1.0, slope: 0.04, gravity: 0.08, runAt: 0.7, evap: 0.016, edgeEvap: 4.0, mobility: 1.0, deposit: 0.0015, granulate: 0.004, absorb: 1.5, hide: 0.0, pin: 0.16, redissolve: 0.75, fur: 1.0, steps: 70 },
+  gouache:     { flow: 0.12, wetFront: 0.9, fibre: 0.15, slope: 0.2, gravity: 0.0, runAt: 9, evap: 0.026, edgeEvap: 0.15, mobility: 0.55, deposit: 0.02, granulate: 0.0, absorb: 0.7, hide: 2.4, pin: 0, redissolve: 0.35, fur: 0.6, steps: 45 },
 };
 
 const EPS = 0.002;
+
+// Per-cell random wicking threshold: every fibre takes water a little differently,
+// which breaks wet edges into fine, furry fingers. Same hash as the GPU shader.
+export function cellRand(x, y) {
+  let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return (h & 0xffff) / 65535;
+}
 
 // Accept a canvas or raw RGBA bytes.
 function pixels(src) {
@@ -112,6 +121,9 @@ export class WetSim {
     }
     this.wind = [0, 0];
     this.gravity = this.p.gravity;
+    this.fz = new Float32Array(N);
+    const fur = this.p.fur ?? 0;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) this.fz[y * w + x] = Math.max(0.15, 1 + fur * (cellRand(x, y) - 0.5) * 2);
   }
 
   // Add water and pigment from rasterised marks (Uint8ClampedArray RGBA from canvases).
@@ -168,7 +180,7 @@ export class WetSim {
   }
 
   step() {
-    const { w, h, W, M, Pr, Pg, Pb, D, Dr, Dg, Db, fx, fy, kx, ky } = this;
+    const { w, h, W, M, Pr, Pg, Pb, D, Dr, Dg, Db, fx, fy, kx, ky, fz } = this;
     const { H, chan } = this.paper;
     const p = this.p;
     const flow = p.flow, slope = p.slope * 0.05, front = p.wetFront, runAt = p.runAt, grav = this.gravity;
@@ -186,8 +198,8 @@ export class WetSim {
             f = flow * (kx[i] + kx[j]) * 0.5 * ((wi + slope * H[i]) - (wj + slope * H[j]));
             // dry paper only takes water from a very wet neighbour, and the fibres decide where
             // dry paper takes water unevenly, following the fibres: feathered edges
-            if (wj <= EPS && f > 0) f = wi > front * Math.max(0.6, 2 - kx[j]) ? f * 0.3 * kx[j] : 0;
-            else if (wi <= EPS && f < 0) f = wj > front * Math.max(0.6, 2 - kx[i]) ? f * 0.3 * kx[i] : 0;
+            if (wj <= EPS && f > 0) f = wi > front * Math.max(0.6, 2 - kx[j]) * fz[j] ? f * 0.3 * kx[j] : 0;
+            else if (wi <= EPS && f < 0) f = wj > front * Math.max(0.6, 2 - kx[i]) * fz[i] ? f * 0.3 * kx[i] : 0;
             if (wi > EPS && wj > EPS) f += wx * Math.min(wi, wj);
             if (f > wi * 0.24) f = wi * 0.24; else if (f < -wj * 0.24) f = -wj * 0.24;
           }
@@ -200,8 +212,8 @@ export class WetSim {
             f = flow * (ky[i] + ky[j]) * 0.5 * ((wi + slope * H[i]) - (wj + slope * H[j]));
             // Downhill into dry paper, water collects as a bead along the edge and only leaks
             // out through a few channels; uphill it creeps like any other edge.
-            if (wj <= EPS && f > 0) f = chan[j] && wi > runAt * 0.25 ? f : wi > front * Math.max(0.6, 2 - ky[j]) ? f * 0.3 * ky[j] : 0;
-            else if (wi <= EPS && f < 0) f = wj > front * Math.max(0.6, 2 - ky[i]) ? f * 0.3 * ky[i] : 0;
+            if (wj <= EPS && f > 0) f = chan[j] && wi > runAt * 0.25 ? f : wi > front * Math.max(0.6, 2 - ky[j]) * fz[j] ? f * 0.3 * ky[j] : 0;
+            else if (wi <= EPS && f < 0) f = wj > front * Math.max(0.6, 2 - ky[i]) * fz[i] ? f * 0.3 * ky[i] : 0;
             // gravity: pooled water runs down. Into dry paper it only breaks through at the
             // most absorbent channels, so the runs stay narrow, like drips.
             // inside a drip channel even a thin trickle keeps running
@@ -409,7 +421,7 @@ export class OilSim {
   stroke(path, width, colour, load, R) {
     const { w, h, wetA, wet, Z } = this;
     const { H } = this.paper;
-    const n = Math.max(3, Math.round(width * 1.6));
+    const n = Math.max(4, Math.round(width * 3));
     const bristles = [];
     for (let b = 0; b < n; b++) {
       bristles.push({ off: (b / (n - 1) - 0.5) * 2 * width + (R() - 0.5) * 0.6, c: colour.map((v) => v / 255 * (0.94 + R() * 0.12)), paint: load * (3 + R() * 3) });
@@ -429,10 +441,13 @@ export class OilSim {
           // a nearly empty brush only touches the high points of the weave
           const touch = b.paint > 0.4 ? 1 : Math.max(0, H[i] - 0.5 + b.paint * 1.4);
           if (touch <= 0) continue;
-          // pick up wet paint already here (wet-on-wet mixing)
+          // pick up paint already here. Oil stays workable for days, so earlier hours smear too.
           if (wetA[i] > 0) {
             const pick = Math.min(0.35, wetA[i]) * 0.5;
             b.c[0] += (wet[k] - b.c[0]) * pick; b.c[1] += (wet[k + 1] - b.c[1]) * pick; b.c[2] += (wet[k + 2] - b.c[2]) * pick;
+          } else if (this.Z[i] > 0.05) {
+            const pick = 0.12;
+            b.c[0] += (this.C[k] - b.c[0]) * pick; b.c[1] += (this.C[k + 1] - b.c[1]) * pick; b.c[2] += (this.C[k + 2] - b.c[2]) * pick;
           }
           const put = Math.min(b.paint, 0.09) * touch;
           const total = wetA[i] + put;
@@ -516,8 +531,8 @@ export class OilSim {
         const i = y * w + x, j = i * 4;
         const zx = (Z[Math.min(i + 1, i - x + w - 1)] - Z[Math.max(i - 1, y * w)]);
         const zy = (Z[Math.min(i + w, this.n - 1)] - Z[Math.max(i - w, 0)]);
-        const shade = 1 - (zx + zy) * 0.35;
-        const spec = Math.max(0, -(zx + zy) * 0.8) ** 2 * 0.35;
+        const shade = 1 - (zx + zy) * 0.18;
+        const spec = Math.max(0, -(zx + zy) * 0.6) ** 2 * 0.15;
         for (let c = 0; c < 3; c++) d[j + c] = Math.max(0, Math.min(255, (C[i * 3 + c] * shade + spec) * 255));
         d[j + 3] = 255;
       }

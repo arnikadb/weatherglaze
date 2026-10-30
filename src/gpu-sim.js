@@ -26,23 +26,31 @@ layout(location = 2) out vec4 o2;
 `;
 
 const STEP = HEAD + OUT3 + `
-uniform float flow, slope, front, runAt, grav, mob, evap, edgeEvap, dep, gran, pin;
+uniform float flow, slope, front, runAt, grav, mob, evap, edgeEvap, dep, gran, pin, fur;
+
+// per-cell wicking threshold (same hash as cellRand in paint-sim.js)
+float fz(ivec2 q) {
+  uint h = uint(q.x) * 374761393u + uint(q.y) * 668265263u;
+  h = (h ^ (h >> 13u)) * 1274126177u;
+  h ^= h >> 16u;
+  return max(0.15, 1.0 + fur * (float(h & 0xffffu) / 65535.0 - 0.5) * 2.0);
+}
 uniform vec2 wind;
 ivec2 sz;
 
 bool inside(ivec2 p) { return p.x >= 0 && p.y >= 0 && p.x < sz.x && p.y < sz.y; }
 
 // Flow from a to b. Vertical edges have a above b, so gravity pushes a -> b.
-float flux(vec4 a0, float ka, bool chA, vec4 b0, float kb, bool chB, bool vert) {
+float flux(vec4 a0, float ka, bool chA, float fa, vec4 b0, float kb, bool chB, float fb, bool vert) {
   float wa = a0.x, wb = b0.x;
   if (wa <= EPS && wb <= EPS) return 0.0;
   float f = flow * (ka + kb) * 0.5 * ((wa + slope * a0.w) - (wb + slope * b0.w));
   if (wb <= EPS && f > 0.0) {
     // downhill into dry paper water only leaks out through drip channels
     if (vert && chB && wa > runAt * 0.25) f = f;
-    else f = wa > front * max(0.6, 2.0 - kb) ? f * 0.3 * kb : 0.0;
+    else f = wa > front * max(0.6, 2.0 - kb) * fb ? f * 0.3 * kb : 0.0;
   } else if (wa <= EPS && f < 0.0) {
-    f = wb > front * max(0.6, 2.0 - ka) ? f * 0.3 * ka : 0.0;
+    f = wb > front * max(0.6, 2.0 - ka) * fa ? f * 0.3 * ka : 0.0;
   }
   if (vert) {
     float gth = chA ? runAt * 0.15 : runAt * 0.5;
@@ -83,7 +91,8 @@ void main() {
     float kn = vert ? (nch ? n2.w - 10.0 : n2.w) : n1.w, ks = vert ? ky : kx;
     // canonical edge direction is right / down
     bool selfFirst = (k == 0 || k == 2);
-    float f = selfFirst ? flux(c0, ks, ch, n0, kn, nch, vert) : flux(n0, kn, nch, c0, ks, ch, vert);
+    float fs = fz(p), fn = fz(q);
+    float f = selfFirst ? flux(c0, ks, ch, fs, n0, kn, nch, fn, vert) : flux(n0, kn, nch, fn, c0, ks, ch, fs, vert);
     // positive out = water leaving this cell
     float out_ = selfFirst ? f : -f;
     if (out_ > 0.0) {
@@ -396,7 +405,7 @@ export class GpuWetSim {
     const p = this.p;
     const uni = {
       flow: p.flow, slope: p.slope * 0.05, front: p.wetFront, runAt: p.runAt, grav: this.gravity, mob: p.mobility,
-      evap: p.evap, edgeEvap: p.edgeEvap, dep: p.deposit, gran: p.granulate, pin: p.pin ?? 0, wind: this.wind,
+      evap: p.evap, edgeEvap: p.edgeEvap, dep: p.deposit, gran: p.granulate, pin: p.pin ?? 0, fur: p.fur ?? 0, wind: this.wind,
     };
     for (let s = 0; s < steps; s++) this._swap(this.progs.step, {}, uni);
   }
