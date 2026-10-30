@@ -23,7 +23,7 @@ function canvas(w, h) {
 }
 
 export const DEFAULTS = {
-  range: 1,                // days of weather to layer: 1, 3, 7 or 30
+  range: 'r24',            // 'r24' (rolling last 24 hours), or days: 1 (today), 3, 7, 30
   medium: 'watercolour',   // watercolour | ink | gouache | oil
   palette: 'temperature',  // temperature | pastel | moody | sunset
   size: 1,                 // splotch size
@@ -77,10 +77,11 @@ const isStorm = (h) => h.code >= 95;
 // series = { points: [{t, temp, precip, cloud, wind, windDir, code, isDay}], start, end, now }
 // Times are local wall-clock ms. Long ranges are merged into at most maxLayers layers.
 export function toLayers(series, maxLayers = 48) {
-  const hours = Math.max(1, Math.ceil((series.now - series.start) / HOUR));
+  const first = Math.floor(series.start / HOUR) * HOUR;   // whole hours, so a rolling window doesn't reshuffle layers
+  const hours = Math.max(1, Math.ceil((series.now - first) / HOUR));
   const per = Math.max(1, Math.ceil(hours / maxLayers));
   const out = [];
-  for (let t0 = series.start; t0 <= series.now; t0 += per * HOUR) {
+  for (let t0 = first; t0 <= series.now; t0 += per * HOUR) {
     const pts = series.points.filter((p) => p.t >= t0 && p.t < t0 + per * HOUR && p.t <= series.now);
     if (!pts.length) continue;
     const avg = (k) => pts.reduce((s, p) => s + p[k], 0) / pts.length;
@@ -123,19 +124,25 @@ export function summarise(series) {
     return { text: `Last ${days} days: ${bits.join(', ')}`, range };
   }
 
-  const hr = (p) => (p.t - series.start) / HOUR;
-  const parts = [['overnight', 0, 5], ['morning', 5, 12], ['afternoon', 12, 18], ['evening', 18, 24]]
-    .map(([name, a, b]) => [name, bucket(upto.filter((h) => hr(h) >= a && hr(h) < b))])
-    .filter(([, v]) => v);
-  const merged = [];
-  for (const [name, v] of parts) {
-    const last = merged[merged.length - 1];
-    if (last && last.v === v) last.names.push(name);
-    else merged.push({ v, names: [name] });
+  // Walk forward in time, grouping hours into parts of the day.
+  const partOf = (t) => { const h = (((t % DAY) + DAY) % DAY) / HOUR; return h < 5 ? 'overnight' : h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening'; };
+  const segs = [];
+  for (const pt of upto.filter((p) => p.t >= series.start)) {
+    const name = partOf(pt.t), day = Math.floor(pt.t / DAY);
+    const last = segs[segs.length - 1];
+    if (last && last.name === name && (last.day === day || name === 'overnight')) last.pts.push(pt);
+    else segs.push({ name, day, pts: [pt] });
   }
-  const when = (names) => (names.length > 2 ? 'all day' : names.map((n) => (n === 'overnight' ? 'overnight' : `in the ${n}`)).join(' and ').replace(' and in the ', ' and '));
+  const merged = [];
+  for (const sg of segs) {
+    const v = bucket(sg.pts);
+    const last = merged[merged.length - 1];
+    if (last && last.v === v) last.names.push(sg.name);
+    else merged.push({ v, names: [sg.name] });
+  }
+  const when = (names) => (names.length > 2 ? 'throughout' : names.map((n) => (n === 'overnight' ? 'overnight' : `in the ${n}`)).join(' and ').replace(' and in the ', ' and '));
   const NOUN = { clear: 'clear skies', grey: 'grey skies', 'patchy cloud': 'patchy cloud', rain: 'rain', 'heavy rain': 'heavy rain', storms: 'storms', snow: 'snow' };
-  let text = 'Today: ' + merged.map(({ v, names }) => `${NOUN[v]} ${when(names)}`).join(', then ');
+  const text = (series.rolling ? 'Last 24 hours: ' : 'Today: ') + merged.map(({ v, names }) => `${NOUN[v]} ${when(names)}`).join(', then ');
   return { text, range };
 }
 
@@ -152,7 +159,12 @@ const DEMO_DAYS = {
 };
 const DEMO_NOW = { rain: 15.4, storm: 20.2, noon: 17, snow: 14, night: 23.6, grey: 12, downpour: 15.5 };
 
-export function demoSeries(name = 'rain', days = 1) {
+export function demoSeries(name = 'rain', range = 1) {
+  if (range === 'r24') {
+    const s = demoSeries(name, 2);
+    return { ...s, start: s.now - DAY, end: s.now, rolling: true };
+  }
+  const days = range;
   const today = Date.UTC(2026, 9, 30);
   const start = today - (days - 1) * DAY;
   const cycle = ['noon', 'grey', 'rain', 'noon', 'storm', 'noon', 'night'];
@@ -278,7 +290,7 @@ export function buildAbstract(W, H, series, seed, place = '', opts = {}) {
   sc.ready = (async () => {
     try {
       // Ground wash: tone the whole sheet in the day's colours so no bare paper shows.
-      const gR = rng(hash(`${seed}|ground|${series.start}`));
+      const gR = rng(hash(`${seed}|ground|${series.rolling ? 'r24' : series.start}`));
       const cols = layers.length ? layers.map(colourOf) : [colourOf({ temp: 20, cloud: 50, precip: 0, isDay: true, code: 2 })];
       const avg = cols.reduce((a, c) => a.map((v, i) => v + c[i] / cols.length), [0, 0, 0]);
       if (engine === 'oil') {

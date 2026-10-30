@@ -193,7 +193,7 @@
   <h3>Customise <button id="reset" type="button">Reset</button></h3>
   <div class="field"><span>Timeframe</span>
     <div class="seg" data-opt="range">
-      <button data-v="1">Today</button><button data-v="3">3 days</button><button data-v="7">Week</button><button data-v="30">Month</button>
+      <button data-v="r24">24 hours</button><button data-v="1">Today</button><button data-v="3">3 days</button><button data-v="7">Week</button><button data-v="30">Month</button>
     </div>
   </div>
   <div class="field"><span>Medium</span>
@@ -270,7 +270,7 @@ const store = {
 function loadOpts() {
   const saved = store.get('opts') || {};
   const o = { ...DEFAULTS, ...saved, layers: { ...DEFAULTS.layers, ...(saved.layers || {}) } };
-  if (params.has('range')) o.range = +params.get('range');
+  if (params.has('range')) o.range = params.get('range') === 'r24' ? 'r24' : +params.get('range');
   if (params.has('medium')) o.medium = params.get('medium');
   if (params.has('palette')) o.palette = params.get('palette');
   if (params.has('size')) o.size = +params.get('size');
@@ -349,7 +349,8 @@ function seed() {
 
 // ------------------------------------------------------------ weather
 
-async function fetchWeather(lat, lon, days = 1) {
+async function fetchWeather(lat, lon, range = 1) {
+  const days = range === 'r24' ? 2 : range;
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
     `&current=temperature_2m,weather_code,cloud_cover,precipitation,wind_speed_10m,wind_direction_10m` +
     `&hourly=temperature_2m,precipitation,cloud_cover,wind_speed_10m,wind_direction_10m,weather_code,is_day` +
@@ -368,6 +369,7 @@ async function fetchWeather(lat, lon, days = 1) {
     })).filter((p) => p.temp != null),
     start, end: start + days * 86400000, now,
   };
+  if (range === 'r24') Object.assign(app.series, { start: now - 86400000, end: now, rolling: true });
   return {
     code: c.weather_code, cloud: c.cloud_cover, precip: c.precipitation,
     wind: c.wind_speed_10m, windDir: c.wind_direction_10m, temp: c.temperature_2m,
@@ -583,7 +585,7 @@ panel.querySelectorAll('.seg[data-opt]').forEach((seg) => seg.addEventListener('
   const b = e.target.closest('button');
   if (!b) return;
   const key = seg.dataset.opt;
-  app.opts[key] = key === 'range' ? +b.dataset.v : b.dataset.v;
+  app.opts[key] = key === 'range' && b.dataset.v !== 'r24' ? +b.dataset.v : b.dataset.v;
   changed({ refetch: key === 'range' });
 }));
 panel.querySelector('select[data-opt=palette]').addEventListener('change', (e) => { app.opts.palette = e.target.value; changed(); });
