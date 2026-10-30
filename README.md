@@ -12,12 +12,12 @@ Save it as a seamless looping wallpaper.
 
 **▶ Try it: `https://YOUR-USERNAME.github.io/sky-painting`**
 
-![A rainy morning and sunny afternoon painted in watercolour](docs/abstract-watercolour.jpg)
+![A rainy morning and sunny afternoon painted in watercolour](abstract-watercolour.jpg)
 
 | | |
 |---|---|
-| ![The same day in oil paint](docs/abstract-oil.jpg) | ![The same day in ink, with a red sun](docs/abstract-ink.jpg) |
-| ![A month of weather in the sunset palette](docs/abstract-month-sunset.jpg) | ![A stormy week in pastel gouache](docs/abstract-week-gouache.jpg) |
+| ![The same day in oil paint](abstract-oil.jpg) | ![The same day in ink, with a red sun](abstract-ink.jpg) |
+| ![A month of weather in the sunset palette](abstract-month-sunset.jpg) | ![A stormy week in pastel gouache](abstract-week-gouache.jpg) |
 
 ## How the weather becomes paint
 
@@ -46,7 +46,7 @@ Settings are remembered, and **Copy link** shares the exact painting.
 
 There's also a **Landscape** mode that paints the sky as it looks right now (sun and moon position, clouds, rain), in watercolour, ink or pixel styles.
 
-![Landscape mode at sunset](docs/landscape-sunset.jpg)
+![Landscape mode at sunset](landscape-sunset.jpg)
 
 ## Save it as a wallpaper
 
@@ -79,11 +79,11 @@ Repo **Settings → Pages → Deploy from a branch → `main` / root**.
 ## Code
 
 ```
-index.html        UI, location search, customise panel, export dialog
-src/abstract.js   hourly weather → layered abstract painting
-src/sky.js        current weather → landscape painting
-src/export.js     GIF encoder + animated WebP muxer
-vendor/gifenc     GIF encoding (MIT, Matt DesLauriers)
+index.html      UI, location search, customise panel, export dialog
+abstract.js     hourly weather → layered abstract painting
+sky.js          current weather → landscape painting
+export.js       GIF encoder + animated WebP muxer
+gifenc.esm.js   GIF encoding (MIT, Matt DesLauriers)
 ```
 
 - **Abstract mode:** `buildAbstract()` paints all the static layers once, to an offscreen canvas. `paintAbstract()` then draws the moving parts (falling drops, wind, twinkling stars) on top each frame.
