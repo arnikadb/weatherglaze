@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weatherglaze: your weather, painted</title>
+<meta name="description" content="Your weather, painted hour by hour as an abstract artwork. Download it as a looping wallpaper.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --glass: rgba(255, 252, 245, 0.72);
+    --glass-strong: rgba(255, 252, 245, 0.92);
+    --ink: #2b2724;
+    --soft: #6d655d;
+    --line: rgba(43, 39, 36, 0.12);
+    --accent: #c4473a;
+    --radius: 16px;
+    font-family: Fraunces, "Iowan Old Style", Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1c1d2b; color: var(--ink); }
+  canvas#sky { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+
+  .chrome { transition: opacity .6s ease, transform .6s ease; }
+  body.idle .chrome { opacity: 0; pointer-events: none; }
+  body.idle { cursor: none; }
+
+  header {
+    position: fixed; top: 20px; left: 24px; right: 24px;
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+    pointer-events: none;
+  }
+  .brand { color: rgba(255, 250, 240, 0.92); text-shadow: 0 1px 12px rgba(0,0,0,.25); }
+  .brand h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .02em; }
+  .brand p { margin: 2px 0 0; font-size: 13px; font-style: italic; opacity: .85; }
+  body.paper { background: #f6f0e4; }
+  body.paper .brand { color: rgba(43,39,36,.85); text-shadow: none; }
+
+  .bar {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    display: flex; gap: 6px; align-items: center; padding: 6px;
+    background: var(--glass); backdrop-filter: blur(14px) saturate(1.4); -webkit-backdrop-filter: blur(14px) saturate(1.4);
+    border: 1px solid rgba(255,255,255,.5); border-radius: 999px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.18);
+    width: max-content; max-width: calc(100vw - 24px); flex-wrap: wrap; justify-content: center;
+  }
+  body.idle .bar { transform: translateX(-50%) translateY(16px); }
+
+  button, select, input {
+    font: inherit; color: inherit; border: 0; background: transparent;
+  }
+  .btn {
+    height: 38px; padding: 0 14px; border-radius: 999px; cursor: pointer; font-size: 14px;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  .btn:hover { background: rgba(43,39,36,.07); }
+  .btn:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.primary { background: var(--ink); color: #fbf6ec; }
+  .btn.primary:hover { background: #000; }
+  .icon { width: 38px; padding: 0; justify-content: center; }
+  .sep { width: 1px; height: 22px; background: var(--line); margin: 0 2px; }
+
+  .seg { display: inline-flex; background: rgba(43,39,36,.06); border-radius: 999px; padding: 3px; }
+  .seg button { height: 32px; padding: 0 12px; border-radius: 999px; cursor: pointer; font-size: 13px; color: var(--soft); }
+  .seg button[aria-pressed="true"] { background: var(--glass-strong); color: var(--ink); box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+
+  .search { position: relative; }
+  .search input {
+    height: 38px; width: 190px; padding: 0 14px 0 34px; border-radius: 999px; font-size: 14px;
+    background: rgba(43,39,36,.06);
+  }
+  .search svg { position: absolute; left: 12px; top: 11px; opacity: .55; }
+  .results {
+    position: absolute; bottom: 46px; left: 0; min-width: 260px; margin: 0; padding: 6px; list-style: none;
+    background: var(--glass-strong); backdrop-filter: blur(14px); border-radius: 14px; box-shadow: 0 10px 40px rgba(0,0,0,.2);
+  }
+  .results:empty { display: none; }
+  .results li { padding: 9px 12px; border-radius: 10px; cursor: pointer; font-size: 14px; }
+  .results li small { color: var(--soft); }
+  .results li:hover, .results li[aria-selected="true"] { background: rgba(43,39,36,.07); }
+
+  dialog {
+    border: 0; padding: 0; border-radius: 22px; background: var(--glass-strong); color: var(--ink);
+    backdrop-filter: blur(20px); box-shadow: 0 30px 80px rgba(0,0,0,.35); width: min(440px, calc(100vw - 32px));
+  }
+  dialog::backdrop { background: rgba(10, 10, 20, .35); }
+  .dlg { padding: 24px; }
+  .dlg h2 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
+  .dlg > p { margin: 0 0 18px; color: var(--soft); font-size: 14px; font-style: italic; }
+  .opts { display: grid; gap: 8px; margin-bottom: 16px; }
+  .opt {
+    display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: center;
+    padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; cursor: pointer;
+  }
+  .opt:has(input:checked) { border-color: var(--ink); background: rgba(255,255,255,.6); }
+  .opt input { grid-row: span 2; accent-color: var(--ink); }
+  .opt b { font-weight: 600; font-size: 15px; }
+  .opt span { color: var(--soft); font-size: 13px; grid-column: 2; }
+  .opt[hidden] { display: none; }
+  .row { display: flex; gap: 12px; align-items: center; margin-bottom: 18px; font-size: 14px; }
+  .row label { color: var(--soft); }
+  .row select { background: rgba(43,39,36,.06); border-radius: 10px; height: 36px; padding: 0 10px; flex: 1; }
+  .progress { height: 6px; border-radius: 3px; background: rgba(43,39,36,.1); overflow: hidden; margin-bottom: 14px; display: none; }
+  .progress i { display: block; height: 100%; width: 0; background: var(--ink); transition: width .15s; }
+  .dlg.busy .progress { display: block; }
+  .actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .tip { font-size: 13px; color: var(--soft); background: rgba(43,39,36,.05); padding: 10px 12px; border-radius: 12px; margin: 0 0 16px; line-height: 1.45; }
+  .tip:empty { display: none; }
+
+  .panel {
+    position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%);
+    width: min(420px, calc(100vw - 24px)); padding: 18px 20px 14px;
+    background: var(--glass-strong); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.25); font-size: 14px;
+  }
+  .panel[hidden] { display: none; }
+  .panel h3 { margin: 0 0 12px; font-size: 16px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+  .panel h3 button { font-size: 13px; color: var(--soft); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+  .field { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .field > span { color: var(--soft); }
+  .field .seg { width: 100%; display: grid; grid-auto-flow: column; }
+  .field .seg button { padding: 0 6px; }
+  .field select { background: rgba(43,39,36,.06); border-radius: 10px; height: 34px; padding: 0 10px; width: 100%; }
+  .field input[type=range] { width: 100%; accent-color: var(--ink); }
+  .panel hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+  .panel .note { margin: 2px 0 0; color: var(--soft); font-size: 12px; font-style: italic; }
+  body.landscape .only-abstract { display: none; }
+
+  .toast {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%) translateY(-80px);
+    background: var(--glass-strong); padding: 10px 18px; border-radius: 999px; font-size: 14px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.2); transition: transform .4s ease; z-index: 10;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  @media (max-width: 720px) {
+    .search input { width: 140px; }
+    .hide-sm { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { .chrome, .bar { transition: none; } }
+</style>
+</head>
+<body>
+<canvas id="sky" aria-label="A live painting of the current sky"></canvas>
+
+<header class="chrome">
+  <div class="brand">
+    <h1>Weatherglaze</h1>
+    <p id="status">Mixing paints…</p>
+  </div>
+</header>
+
+<nav class="bar chrome" aria-label="Controls">
+  <div class="search">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="q" type="search" placeholder="Search a city" autocomplete="off" aria-label="Search a city" role="combobox" aria-expanded="false" aria-controls="results">
+    <ul id="results" class="results" role="listbox"></ul>
+  </div>
+  <button class="btn icon" id="locate" title="Use my location" aria-label="Use my location">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg>
+  </button>
+  <span class="sep hide-sm"></span>
+  <div class="seg" role="group" aria-label="Painting style">
+    <button data-style="abstract" aria-pressed="true">Abstract</button>
+    <button data-style="watercolour" aria-pressed="false">Landscape</button>
+    <button data-style="ink" aria-pressed="false">Ink</button>
+    <button data-style="pixel" aria-pressed="false">Pixel</button>
+  </div>
+  <button class="btn icon" id="repaint" title="Repaint (new brushstrokes)" aria-label="Repaint">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/></svg>
+  </button>
+  <button class="btn icon" id="captionBtn" title="Show or hide the caption" aria-label="Toggle caption" aria-pressed="true">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg>
+  </button>
+  <button class="btn icon hide-sm" id="share" title="Copy a link to this sky" aria-label="Copy link">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+  </button>
+  <button class="btn icon hide-sm" id="full" title="Fullscreen" aria-label="Fullscreen">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+  </button>
+  <button class="btn only-abstract" id="customise" aria-expanded="false" aria-controls="panel">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+    Customise
+  </button>
+  <button class="btn primary" id="download">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg>
+    Save this sky
+  </button>
+</nav>
+
+<section class="panel chrome" id="panel" hidden aria-label="Customise the painting">
+  <h3>Customise <button id="reset" type="button">Reset</button></h3>
+  <div class="field"><span>Timeframe</span>
+    <div class="seg" data-opt="range">
+      <button data-v="1">Today</button><button data-v="3">3 days</button><button data-v="7">Week</button><button data-v="30">Month</button>
+    </div>
+  </div>
+  <div class="field"><span>Medium</span>
+    <div class="seg" data-opt="medium">
+      <button data-v="watercolour">Watercolour</button><button data-v="gouache">Gouache</button><button data-v="oil">Oil</button><button data-v="ink">Ink</button>
+    </div>
+  </div>
+  <div class="field"><span>Palette</span>
+    <select data-opt="palette">
+      <option value="temperature">Temperature</option>
+      <option value="pastel">Pastel</option>
+      <option value="moody">Moody</option>
+      <option value="sunset">Sunset</option>
+    </select>
+  </div>
+  <div class="field"><span>Caption</span>
+    <div class="seg" id="captionSeg"><button data-v="1">Show</button><button data-v="0">Hide</button></div>
+  </div>
+  <div class="field"><span>Splotch size</span><input type="range" data-opt="size" min="0.4" max="2" step="0.05"></div>
+  <hr>
+  <div class="field"><span>Colour</span><input type="range" data-layer="colour" min="0" max="1.5" step="0.05"></div>
+  <div class="field"><span>Rain</span><input type="range" data-layer="rain" min="0" max="1.5" step="0.05"></div>
+  <div class="field"><span>Sun</span><input type="range" data-layer="sun" min="0" max="1.5" step="0.05"></div>
+  <div class="field"><span>Cloud</span><input type="range" data-layer="cloud" min="0" max="1.5" step="0.05"></div>
+  <div class="field"><span>Wind</span><input type="range" data-layer="wind" min="0" max="1.5" step="0.05"></div>
+  <p class="note">Each hour of weather is one layer of paint. Longer timeframes stack more layers.</p>
+</section>
+
+<dialog id="dlg">
+  <form method="dialog" class="dlg" id="dlgForm">
+    <h2>Save this sky</h2>
+    <p>An 8-second seamless loop, ready to be a wallpaper.</p>
+    <div class="opts">
+      <label class="opt" id="optWebp"><input type="radio" name="fmt" value="webp" checked><b>Animated WebP</b><span>Best quality. Opera can use it as a wallpaper directly.</span></label>
+      <label class="opt"><input type="radio" name="fmt" value="gif"><b>Animated GIF</b><span>Works everywhere. Fewer colours, bigger file.</span></label>
+      <label class="opt"><input type="radio" name="fmt" value="png"><b>Still image (PNG)</b><span>One crisp frame of the current moment.</span></label>
+    </div>
+    <div class="row">
+      <label for="size">Size</label>
+      <select id="size">
+        <option value="1280x720">1280 × 720 (fast)</option>
+        <option value="1920x1080" selected>1920 × 1080 (HD)</option>
+        <option value="2560x1440">2560 × 1440 (QHD)</option>
+        <option value="1080x1920">1080 × 1920 (phone)</option>
+        <option value="2048x2048">2048 × 2048 (square)</option>
+        <option value="screen">My screen</option>
+      </select>
+    </div>
+    <p class="tip" id="tip"></p>
+    <div class="progress" aria-hidden="true"><i id="bar"></i></div>
+    <div class="actions">
+      <button class="btn" value="cancel" id="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" id="go" value="default">Paint &amp; download</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script type="module">
+import { buildScene, paint, stateFromWeather, demoWeather, DEMOS, hash, LOOP_SECONDS } from './src/sky.js';
+import { exportGif, exportWebp, exportPng, webpSupported } from './src/export.js';
+import { buildAbstract, paintAbstract, demoSeries, summarise, DEFAULTS } from './src/abstract.js';
+
+const $ = (s) => document.querySelector(s);
+const cvs = $('#sky');
+const ctx = cvs.getContext('2d');
+const params = new URLSearchParams(location.search);
+const store = {
+  get(k) { try { return JSON.parse(localStorage.getItem('sky:' + k)); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem('sky:' + k, JSON.stringify(v)); } catch {} },
+};
+
+function loadOpts() {
+  const saved = store.get('opts') || {};
+  const o = { ...DEFAULTS, ...saved, layers: { ...DEFAULTS.layers, ...(saved.layers || {}) } };
+  if (params.has('range')) o.range = +params.get('range');
+  if (params.has('medium')) o.medium = params.get('medium');
+  if (params.has('palette')) o.palette = params.get('palette');
+  if (params.has('size')) o.size = +params.get('size');
+  if (params.has('l')) {
+    const v = params.get('l').split(',').map(Number);
+    Object.keys(DEFAULTS.layers).forEach((k, i) => { if (!isNaN(v[i])) o.layers[k] = v[i]; });
+  }
+  return o;
+}
+
+const app = {
+  place: null,           // {name, lat, lon}
+  weather: null,         // normalised weather object for stateFromWeather
+  state: null,
+  style: params.get('style') || store.get('style') || 'abstract',
+  series: null,          // hourly weather for the abstract mode
+  opts: loadOpts(),
+  caption: params.get('caption') !== '0' && store.get('caption') !== false,
+  reroll: 0,
+  scene: null,
+  demo: params.get('demo'),
+};
+
+// ------------------------------------------------------------ helpers
+
+let toastTimer;
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3200);
+}
+
+const localMs = (iso) => Date.parse(iso + 'Z'); // Open-Meteo local time strings, treated as UTC for arithmetic
+
+function fmtTime(ms) {
+  const d = new Date(ms);
+  let h = d.getUTCHours(), m = d.getUTCMinutes();
+  const ap = h >= 12 ? 'pm' : 'am';
+  h = h % 12 || 12;
+  return `${h}:${String(m).padStart(2, '0')}${ap}`;
+}
+
+function fmtDate(ms) {
+  return new Date(ms).toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+}
+
+function caption() {
+  if (!app.caption || !app.state) return null;
+  if (app.style === 'abstract' && app.series) {
+    const { text, range } = summarise(app.series);
+    const when = app.opts.range === 1 ? fmtDate(app.series.now) : '';
+    return { title: app.place?.name || 'Somewhere', sub: [when, text, range].filter(Boolean).join('  ·  ') };
+  }
+  const s = app.state, w = app.weather;
+  const bits = [];
+  if (w.temp != null) bits.push(`${Math.round(w.temp)}°`);
+  bits.push(s.label);
+  if (w.now) bits.push(fmtTime(w.now));
+  return { title: app.place?.name || 'Somewhere', sub: bits.join('  ·  ') };
+}
+
+function seed() {
+  // The abstract painting keeps its seed so earlier hours don't move; the landscape changes daily.
+  const day = app.style !== 'abstract' && app.weather ? new Date(app.weather.now).toISOString().slice(0, 10) : '';
+  return hash(`${app.place?.name}|${day}|${app.reroll}`);
+}
+
+// ------------------------------------------------------------ weather
+
+async function fetchWeather(lat, lon, days = 1) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+    `&current=temperature_2m,weather_code,cloud_cover,precipitation,wind_speed_10m,wind_direction_10m` +
+    `&hourly=temperature_2m,precipitation,cloud_cover,wind_speed_10m,wind_direction_10m,weather_code,is_day` +
+    `&daily=sunrise,sunset&timezone=auto&forecast_days=1&past_days=${days - 1}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('weather ' + res.status);
+  const j = await res.json();
+  const c = j.current;
+  const now = Date.now() + j.utc_offset_seconds * 1000;
+  const hr = j.hourly;
+  const start = localMs(hr.time[0]);
+  app.series = {
+    points: hr.time.map((t, i) => ({
+      t: localMs(t), temp: hr.temperature_2m[i], precip: hr.precipitation[i] ?? 0, cloud: hr.cloud_cover[i] ?? 0,
+      wind: hr.wind_speed_10m[i] ?? 0, windDir: hr.wind_direction_10m[i] ?? 0, code: hr.weather_code[i] ?? 0, isDay: !!hr.is_day[i],
+    })).filter((p) => p.temp != null),
+    start, end: start + days * 86400000, now,
+  };
+  return {
+    code: c.weather_code, cloud: c.cloud_cover, precip: c.precipitation,
+    wind: c.wind_speed_10m, windDir: c.wind_direction_10m, temp: c.temperature_2m,
+    now: Date.now() + j.utc_offset_seconds * 1000,
+    sunrise: localMs(j.daily.sunrise[0]), sunset: localMs(j.daily.sunset[0]),
+  };
+}
+
+async function searchPlaces(q) {
+  const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=6&language=en`);
+  const j = await res.json();
+  return (j.results || []).map((r) => ({ name: r.name, lat: r.latitude, lon: r.longitude, detail: [r.admin1, r.country].filter(Boolean).join(', ') }));
+}
+
+async function reverseName(lat, lon) {
+  try {
+    const r = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`);
+    const j = await r.json();
+    return j.city || j.locality || j.principalSubdivision || 'Right here';
+  } catch { return 'Right here'; }
+}
+
+async function load(place) {
+  app.place = place;
+  $('#status').textContent = `Looking up the sky over ${place.name}…`;
+  try {
+    if (app.demo) throw new Error('demo');
+    app.weather = await fetchWeather(place.lat, place.lon, app.opts.range);
+  } catch (e) {
+    const name = DEMOS[app.demo] ? app.demo : 'rain';
+    app.weather = demoWeather(name);
+    app.series = demoSeries(app.demo || 'rain', app.opts.range);
+    if (!app.demo) toast("Couldn't reach the weather service, so here's a demo sky.");
+  }
+  app.state = stateFromWeather(app.weather);
+  store.set('place', place);
+  rebuild();
+  $('#status').textContent = `${place.name} · ${app.state.label}${app.weather.temp != null ? ` · ${Math.round(app.weather.temp)}°` : ''}`;
+  document.title = `${place.name}: Weatherglaze`;
+}
+
+// ------------------------------------------------------------ painting
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.min(Math.round(innerWidth * dpr), 2880);
+  const h = Math.round(w * innerHeight / innerWidth);
+  if (cvs.width !== w || cvs.height !== h) { cvs.width = w; cvs.height = h; rebuild(); }
+}
+
+function rebuild() {
+  if (!app.state) return;
+  app.scene = makeScene(cvs.width, cvs.height);
+}
+
+function makeScene(w, h) {
+  return app.style === 'abstract' && app.series
+    ? buildAbstract(w, h, app.series, seed(), app.place?.name, app.opts)
+    : buildScene(w, h, app.state, seed(), app.place?.name);
+}
+
+function paintAny(c, sc, p, opts) {
+  if (sc.kind === 'abstract') paintAbstract(c, sc, p, opts);
+  else paint(c, sc, p, { ...opts, style: app.style === 'abstract' ? 'watercolour' : app.style });
+}
+
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+function frame(t) {
+  if (app.scene) {
+    const p = reduceMotion ? 0.25 : (t / 1000 / LOOP_SECONDS) % 1;
+    paintAny(ctx, app.scene, p, { caption: caption() });
+  }
+  requestAnimationFrame(frame);
+}
+
+// ------------------------------------------------------------ UI
+
+function setStyle(s) {
+  app.style = s;
+  store.set('style', s);
+  document.body.classList.toggle('landscape', s !== 'abstract');
+  if (s !== 'abstract') togglePanel(false);
+  document.body.classList.toggle('paper', s === 'abstract');
+  document.querySelectorAll('[data-style]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.style === s)));
+  rebuild();
+}
+document.querySelectorAll('[data-style]').forEach((b) => b.addEventListener('click', () => setStyle(b.dataset.style)));
+
+$('#repaint').addEventListener('click', () => { app.reroll++; rebuild(); });
+
+function setCaption(on) {
+  app.caption = on;
+  store.set('caption', on);
+  $('#captionBtn').setAttribute('aria-pressed', String(on));
+  document.querySelectorAll('#captionSeg button').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.v === '1') === on)));
+}
+$('#captionBtn').addEventListener('click', () => setCaption(!app.caption));
+document.querySelectorAll('#captionSeg button').forEach((b) => b.addEventListener('click', () => setCaption(b.dataset.v === '1')));
+
+$('#full').addEventListener('click', () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.()));
+
+$('#share').addEventListener('click', async () => {
+  const u = new URL(location.href);
+  u.search = '';
+  if (app.place) { u.searchParams.set('lat', app.place.lat.toFixed(3)); u.searchParams.set('lon', app.place.lon.toFixed(3)); u.searchParams.set('name', app.place.name); }
+  u.searchParams.set('style', app.style);
+  if (app.style === 'abstract') {
+    const o = app.opts;
+    u.searchParams.set('range', o.range);
+    u.searchParams.set('medium', o.medium);
+    u.searchParams.set('palette', o.palette);
+    u.searchParams.set('size', o.size);
+    u.searchParams.set('l', Object.keys(DEFAULTS.layers).map((k) => o.layers[k]).join(','));
+  }
+  try { await navigator.clipboard.writeText(u.toString()); toast('Link copied'); } catch { prompt('Copy this link', u.toString()); }
+});
+
+$('#locate').addEventListener('click', () => {
+  if (!navigator.geolocation) return toast('Location is not available in this browser.');
+  toast('Finding you…');
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    const { latitude: lat, longitude: lon } = pos.coords;
+    load({ name: await reverseName(lat, lon), lat, lon });
+  }, () => toast("Couldn't get your location. Try searching instead."), { timeout: 10000 });
+});
+
+// search
+const q = $('#q'), results = $('#results');
+let searchTimer, found = [], active = -1;
+function renderResults() {
+  results.innerHTML = '';
+  found.forEach((r, i) => {
+    const li = document.createElement('li');
+    li.role = 'option';
+    li.setAttribute('aria-selected', String(i === active));
+    li.innerHTML = `${r.name} <small></small>`;
+    li.querySelector('small').textContent = r.detail;
+    li.addEventListener('mousedown', (e) => { e.preventDefault(); choose(r); });
+    results.appendChild(li);
+  });
+  q.setAttribute('aria-expanded', String(found.length > 0));
+}
+function choose(r) { found = []; renderResults(); q.value = ''; q.blur(); load(r); }
+q.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const v = q.value.trim();
+  if (v.length < 2) { found = []; return renderResults(); }
+  searchTimer = setTimeout(async () => {
+    try { found = await searchPlaces(v); active = 0; renderResults(); } catch { toast('Search is unavailable right now.'); }
+  }, 250);
+});
+q.addEventListener('keydown', (e) => {
+  if (!found.length) return;
+  if (e.key === 'ArrowDown') { active = (active + 1) % found.length; renderResults(); e.preventDefault(); }
+  if (e.key === 'ArrowUp') { active = (active - 1 + found.length) % found.length; renderResults(); e.preventDefault(); }
+  if (e.key === 'Enter') { choose(found[Math.max(0, active)]); e.preventDefault(); }
+  if (e.key === 'Escape') { found = []; renderResults(); }
+});
+q.addEventListener('blur', () => setTimeout(() => { found = []; renderResults(); }, 150));
+
+// idle: hide controls so the painting is clean
+let idleTimer;
+function wake() {
+  document.body.classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (document.activeElement === q || $('#dlg').open || !$('#panel').hidden) return;
+    document.body.classList.add('idle');
+  }, 3500);
+}
+['mousemove', 'keydown', 'touchstart', 'focusin'].forEach((ev) => addEventListener(ev, wake, { passive: true }));
+
+// ------------------------------------------------------------ customise panel
+
+const panel = $('#panel');
+function togglePanel(open = panel.hidden) {
+  panel.hidden = !open;
+  $('#customise').setAttribute('aria-expanded', String(open));
+}
+$('#customise').addEventListener('click', () => togglePanel());
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && !panel.hidden) togglePanel(false); });
+
+function syncPanel() {
+  const o = app.opts;
+  panel.querySelectorAll('.seg[data-opt]').forEach((seg) => {
+    seg.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === String(o[seg.dataset.opt]))));
+  });
+  panel.querySelector('select[data-opt=palette]').value = o.palette;
+  panel.querySelector('input[data-opt=size]').value = o.size;
+  panel.querySelectorAll('input[data-layer]').forEach((r) => { r.value = o.layers[r.dataset.layer]; });
+}
+
+// Sliders rebuild on a short delay so dragging stays smooth.
+let rebuildTimer;
+function changed({ refetch = false } = {}) {
+  store.set('opts', app.opts);
+  syncPanel();
+  clearTimeout(rebuildTimer);
+  rebuildTimer = setTimeout(() => (refetch && app.place ? load(app.place) : rebuild()), refetch ? 0 : 60);
+}
+
+panel.querySelectorAll('.seg[data-opt]').forEach((seg) => seg.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  const key = seg.dataset.opt;
+  app.opts[key] = key === 'range' ? +b.dataset.v : b.dataset.v;
+  changed({ refetch: key === 'range' });
+}));
+panel.querySelector('select[data-opt=palette]').addEventListener('change', (e) => { app.opts.palette = e.target.value; changed(); });
+panel.querySelector('input[data-opt=size]').addEventListener('input', (e) => { app.opts.size = +e.target.value; changed(); });
+panel.querySelectorAll('input[data-layer]').forEach((r) => r.addEventListener('input', () => { app.opts.layers[r.dataset.layer] = +r.value; changed(); }));
+$('#reset').addEventListener('click', () => {
+  const range = app.opts.range;
+  app.opts = { ...DEFAULTS, layers: { ...DEFAULTS.layers } };
+  changed({ refetch: range !== DEFAULTS.range });
+});
+syncPanel();
+
+// ------------------------------------------------------------ export
+
+const dlg = $('#dlg');
+const canWebp = webpSupported();
+$('#optWebp').hidden = !canWebp;
+if (!canWebp) dlg.querySelector('input[value="gif"]').checked = true;
+
+const TIPS = {
+  webp: '<b>To use it in Opera:</b> drag the downloaded file into an Opera tab, right-click it and choose <i>Use image as wallpaper</i>.',
+  gif: 'GIFs are limited to 256 colours, so soft gradients may show some banding. 1280 × 720 keeps the file small.',
+  png: '',
+};
+function updateTip() { $('#tip').innerHTML = TIPS[dlg.querySelector('input[name=fmt]:checked').value]; }
+dlg.querySelectorAll('input[name=fmt]').forEach((r) => r.addEventListener('change', updateTip));
+
+$('#download').addEventListener('click', () => { updateTip(); dlg.showModal(); });
+
+let abort;
+$('#cancel').addEventListener('click', () => abort?.abort());
+
+$('#dlgForm').addEventListener('submit', async (e) => {
+  if (e.submitter?.id !== 'go') return;
+  e.preventDefault();
+  const fmt = dlg.querySelector('input[name=fmt]:checked').value;
+  let [w, h] = $('#size').value === 'screen'
+    ? [Math.round(screen.width * (devicePixelRatio || 1)), Math.round(screen.height * (devicePixelRatio || 1))]
+    : $('#size').value.split('x').map(Number);
+  const form = $('#dlgForm');
+  const go = $('#go');
+  form.classList.add('busy'); go.disabled = true; go.textContent = 'Painting…';
+  abort = new AbortController();
+  try {
+    const sc = makeScene(w, h);
+    const cap = caption();
+    const draw = (c, p) => paintAny(c, sc, p, { caption: cap, grain: fmt === 'gif' ? 0 : 1 });
+    const onProgress = (f) => { $('#bar').style.width = `${Math.round(f * 100)}%`; };
+    let blob;
+    if (fmt === 'png') blob = await exportPng({ width: w, height: h, draw, p: 0.25 });
+    else if (fmt === 'gif') blob = await exportGif({ width: w, height: h, fps: 12, seconds: LOOP_SECONDS, draw, onProgress, signal: abort.signal });
+    else blob = await exportWebp({ width: w, height: h, fps: 15, seconds: LOOP_SECONDS, draw, onProgress, signal: abort.signal });
+    const name = `sky-${(app.place?.name || 'painting').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${app.style}.${fmt}`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    dlg.close();
+    toast(`Saved ${name} (${(blob.size / 1048576).toFixed(1)} MB)`);
+  } catch (err) {
+    if (err.name !== 'AbortError') { console.error(err); toast(err.message || 'Export failed'); }
+  } finally {
+    form.classList.remove('busy'); go.disabled = false; go.textContent = 'Paint & download'; $('#bar').style.width = '0';
+  }
+});
+
+// ------------------------------------------------------------ start
+
+setStyle(app.style);
+setCaption(app.caption);
+addEventListener('resize', () => { clearTimeout(resize.t); resize.t = setTimeout(resize, 150); });
+resize();
+requestAnimationFrame(frame);
+wake();
+
+const lat = parseFloat(params.get('lat')), lon = parseFloat(params.get('lon'));
+const start = !isNaN(lat) && !isNaN(lon)
+  ? { name: params.get('name') || 'Somewhere', lat, lon }
+  : store.get('place') || { name: 'Brisbane', lat: -27.4698, lon: 153.0251 };
+await document.fonts?.ready;
+load(start);
+setInterval(() => app.place && !app.demo && load(app.place), 15 * 60 * 1000);
+</script>
+</body>
+</html>
