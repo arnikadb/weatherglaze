@@ -17,9 +17,9 @@
 import { rng } from './sky.js';
 
 export const MEDIA = {
-  watercolour: { flow: 0.2, wetFront: 0.55, fibre: 0.35, slope: 0.6, gravity: 0.06, runAt: 0.75, evap: 0.016, edgeEvap: 3.2, mobility: 1.0, deposit: 0.0012, granulate: 0.012, absorb: 1.25, hide: 0.04, pin: 0.12, steps: 80 },
-  ink:         { flow: 0.26, wetFront: 0.35, fibre: 0.9, slope: 0.25, gravity: 0.05, runAt: 0.7, evap: 0.018, edgeEvap: 1.4, mobility: 1.0, deposit: 0.03, granulate: 0.0, absorb: 1.05, hide: 0.0, pin: 0.06, steps: 70 },
-  gouache:     { flow: 0.07, wetFront: 0.8, fibre: 0.15, slope: 0.2, gravity: 0.0, runAt: 9, evap: 0.026, edgeEvap: 0.7, mobility: 0.55, deposit: 0.02, granulate: 0.0, absorb: 0.7, hide: 2.4, pin: 0.03, steps: 45 },
+  watercolour: { flow: 0.2, wetFront: 1.3, fibre: 0.75, slope: 0.6, gravity: 0.28, runAt: 0.6, evap: 0.016, edgeEvap: 3.2, mobility: 1.0, deposit: 0.0012, granulate: 0.035, absorb: 1.25, hide: 0.04, pin: 0.12, redissolve: 0.2, steps: 80 },
+  ink:         { flow: 0.26, wetFront: 0.45, fibre: 1.0, slope: 0.25, gravity: 0.08, runAt: 0.7, evap: 0.016, edgeEvap: 4.0, mobility: 1.0, deposit: 0.0015, granulate: 0.004, absorb: 1.5, hide: 0.0, pin: 0.16, redissolve: 0.75, steps: 70 },
+  gouache:     { flow: 0.12, wetFront: 0.9, fibre: 0.15, slope: 0.2, gravity: 0.0, runAt: 9, evap: 0.026, edgeEvap: 0.15, mobility: 0.55, deposit: 0.02, granulate: 0.0, absorb: 0.7, hide: 2.4, pin: 0, redissolve: 0.35, steps: 45 },
 };
 
 const EPS = 0.002;
@@ -72,7 +72,17 @@ export function makePaper(w, h, seed) {
 
   // Direction-dependent conductivity, so water creeps further along some fibres.
   const nx = valueNoise(w, h, R, 3), ny = valueNoise(w, h, R, 3);
-  return { w, h, H, nx, ny };
+  // A few columns where water can find a line down the tilted sheet (drips).
+  const chan = new Uint8Array(w * h);
+  for (let x = 0; x < w; x++) {
+    if (R() > 0.035) continue;
+    let cx = x;
+    for (let y = 0; y < h; y++) {
+      if (R() < 0.04) cx += R() < 0.5 ? -1 : 1;
+      if (cx >= 0 && cx < w) chan[y * w + cx] = 1;
+    }
+  }
+  return { w, h, H, nx, ny, chan };
 }
 
 // ------------------------------------------------------------ water-based media
@@ -107,11 +117,25 @@ export class WetSim {
   // Add water and pigment from rasterised marks (Uint8ClampedArray RGBA from canvases).
   addMarks(water, mass, colour, waterScale = 2, massScale = 1.5) {
     water = pixels(water); mass = pixels(mass); colour = pixels(colour);
-    const { W, M, Pr, Pg, Pb } = this;
+    const { W, M, Pr, Pg, Pb, C } = this;
+    const rd = this.p.redissolve || 0, absorb = this.p.absorb, pc = this.paperColour;
     for (let i = 0, j = 0; i < this.n; i++, j += 4) {
       // amounts are stored in the alpha channel (the canvases are built up additively)
       const wv = water[j + 3] / 255 * waterScale;
       if (wv > 0) W[i] += wv;
+      // Re-wetting: water lifts some of the dried paint back into suspension.
+      if (wv > 0 && rd > 0) {
+        const f = Math.min(1, wv) * rd, k = 3 * i;
+        const l0 = -Math.log(Math.max(C[k] / pc[0], 0.02)) * f;
+        const l1 = -Math.log(Math.max(C[k + 1] / pc[1], 0.02)) * f;
+        const l2 = -Math.log(Math.max(C[k + 2] / pc[2], 0.02)) * f;
+        const m = (l0 + l1 + l2) / 3 / absorb;
+        if (m > 1e-4) {
+          C[k] = Math.min(pc[0], C[k] * Math.exp(l0)); C[k + 1] = Math.min(pc[1], C[k + 1] * Math.exp(l1)); C[k + 2] = Math.min(pc[2], C[k + 2] * Math.exp(l2));
+          M[i] += m;
+          Pr[i] += m * Math.exp(-l0 / (m * absorb)); Pg[i] += m * Math.exp(-l1 / (m * absorb)); Pb[i] += m * Math.exp(-l2 / (m * absorb));
+        }
+      }
       const m = mass[j + 3] / 255 * massScale;
       if (m > 0) {
         const r = colour[j] / 255, g = colour[j + 1] / 255, b = colour[j + 2] / 255;
@@ -145,7 +169,7 @@ export class WetSim {
 
   step() {
     const { w, h, W, M, Pr, Pg, Pb, D, Dr, Dg, Db, fx, fy, kx, ky } = this;
-    const { H } = this.paper;
+    const { H, chan } = this.paper;
     const p = this.p;
     const flow = p.flow, slope = p.slope * 0.05, front = p.wetFront, runAt = p.runAt, grav = this.gravity;
     const [wx, wy] = this.wind;
@@ -161,8 +185,9 @@ export class WetSim {
           if (wi > EPS || wj > EPS) {
             f = flow * (kx[i] + kx[j]) * 0.5 * ((wi + slope * H[i]) - (wj + slope * H[j]));
             // dry paper only takes water from a very wet neighbour, and the fibres decide where
-            if (wj <= EPS && f > 0) f = wi > front ? f * 0.3 * kx[j] : 0;
-            else if (wi <= EPS && f < 0) f = wj > front ? f * 0.3 * kx[i] : 0;
+            // dry paper takes water unevenly, following the fibres: feathered edges
+            if (wj <= EPS && f > 0) f = wi > front * Math.max(0.6, 2 - kx[j]) ? f * 0.3 * kx[j] : 0;
+            else if (wi <= EPS && f < 0) f = wj > front * Math.max(0.6, 2 - kx[i]) ? f * 0.3 * kx[i] : 0;
             if (wi > EPS && wj > EPS) f += wx * Math.min(wi, wj);
             if (f > wi * 0.24) f = wi * 0.24; else if (f < -wj * 0.24) f = -wj * 0.24;
           }
@@ -173,9 +198,15 @@ export class WetSim {
           let f = 0;
           if (wi > EPS || wj > EPS) {
             f = flow * (ky[i] + ky[j]) * 0.5 * ((wi + slope * H[i]) - (wj + slope * H[j]));
-            if (wi > runAt) f += grav * (wi - runAt) * 4;                   // gravity: pooled water runs down
-            if (wj <= EPS && f > 0) f = wi > front ? f * 0.3 * ky[j] : 0;
-            else if (wi <= EPS && f < 0) f = wj > front ? f * 0.3 * ky[i] : 0;
+            // Downhill into dry paper, water collects as a bead along the edge and only leaks
+            // out through a few channels; uphill it creeps like any other edge.
+            if (wj <= EPS && f > 0) f = chan[j] && wi > runAt * 0.25 ? f : wi > front * Math.max(0.6, 2 - ky[j]) ? f * 0.3 * ky[j] : 0;
+            else if (wi <= EPS && f < 0) f = wj > front * Math.max(0.6, 2 - ky[i]) ? f * 0.3 * ky[i] : 0;
+            // gravity: pooled water runs down. Into dry paper it only breaks through at the
+            // most absorbent channels, so the runs stay narrow, like drips.
+            // inside a drip channel even a thin trickle keeps running
+            const gth = chan[i] ? runAt * 0.15 : runAt * 0.5;
+            if (wi > gth && (wj > EPS || (wi > runAt * 0.25 && chan[j]))) f += grav * (wi - gth) * 4;
             if (wi > EPS && wj > EPS) f += wy * Math.min(wi, wj);
             if (f > wi * 0.24) f = wi * 0.24; else if (f < -wj * 0.24) f = -wj * 0.24;
           }

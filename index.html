@@ -253,6 +253,17 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<!-- Version tag forces browsers to fetch new code after each release. -->
+<script type="importmap">
+{ "imports": {
+  "./src/sky.js": "./src/sky.js?v=20261030b",
+  "./src/export.js": "./src/export.js?v=20261030b",
+  "./src/abstract.js": "./src/abstract.js?v=20261030b",
+  "./src/paint-sim.js": "./src/paint-sim.js?v=20261030b",
+  "./src/gpu-sim.js": "./src/gpu-sim.js?v=20261030b",
+  "./vendor/gifenc.esm.js": "./vendor/gifenc.esm.js?v=20261030b"
+} }
+</script>
 <script type="module">
 import { buildScene, paint, stateFromWeather, demoWeather, DEMOS, hash, LOOP_SECONDS } from './src/sky.js';
 import { exportGif, exportWebp, exportPng, webpSupported } from './src/export.js';

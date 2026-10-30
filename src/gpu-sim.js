@@ -33,13 +33,21 @@ ivec2 sz;
 bool inside(ivec2 p) { return p.x >= 0 && p.y >= 0 && p.x < sz.x && p.y < sz.y; }
 
 // Flow from a to b. Vertical edges have a above b, so gravity pushes a -> b.
-float flux(vec4 a0, float ka, vec4 b0, float kb, bool vert) {
+float flux(vec4 a0, float ka, bool chA, vec4 b0, float kb, bool chB, bool vert) {
   float wa = a0.x, wb = b0.x;
   if (wa <= EPS && wb <= EPS) return 0.0;
   float f = flow * (ka + kb) * 0.5 * ((wa + slope * a0.w) - (wb + slope * b0.w));
-  if (vert && wa > runAt) f += grav * (wa - runAt) * 4.0;
-  if (wb <= EPS && f > 0.0) f = wa > front ? f * 0.3 * kb : 0.0;
-  else if (wa <= EPS && f < 0.0) f = wb > front ? f * 0.3 * ka : 0.0;
+  if (wb <= EPS && f > 0.0) {
+    // downhill into dry paper water only leaks out through drip channels
+    if (vert && chB && wa > runAt * 0.25) f = f;
+    else f = wa > front * max(0.6, 2.0 - kb) ? f * 0.3 * kb : 0.0;
+  } else if (wa <= EPS && f < 0.0) {
+    f = wb > front * max(0.6, 2.0 - ka) ? f * 0.3 * ka : 0.0;
+  }
+  if (vert) {
+    float gth = chA ? runAt * 0.15 : runAt * 0.5;
+    if (wa > gth && (wb > EPS || (wa > runAt * 0.25 && chB))) f += grav * (wa - gth) * 4.0;
+  }
   if (wa > EPS && wb > EPS) f += (vert ? wind.y : wind.x) * min(wa, wb);
   return clamp(f, -wb * 0.24, wa * 0.24);
 }
@@ -56,7 +64,9 @@ void main() {
   vec4 c0 = texelFetch(s0, p, 0), c1 = texelFetch(s1, p, 0), c2 = texelFetch(s2, p, 0);
   float W = c0.x, M = c0.y, D = c0.z, H = c0.w;
   vec3 P = c1.xyz, DC = c2.xyz;
-  float kx = c1.w, ky = c2.w;
+  float kx = c1.w, kyv = c2.w;
+  bool ch = kyv > 5.0;
+  float ky = ch ? kyv - 10.0 : kyv;
 
   float nW = W, nM = M; vec3 nP = P;
   int dry = 0; float supply = 0.0;
@@ -69,10 +79,11 @@ void main() {
     if (n0.x <= EPS) dry++;
     supply = max(supply, n0.x);
     bool vert = k >= 2;
-    float kn = vert ? n2.w : n1.w, ks = vert ? ky : kx;
+    bool nch = n2.w > 5.0;
+    float kn = vert ? (nch ? n2.w - 10.0 : n2.w) : n1.w, ks = vert ? ky : kx;
     // canonical edge direction is right / down
     bool selfFirst = (k == 0 || k == 2);
-    float f = selfFirst ? flux(c0, ks, n0, kn, vert) : flux(n0, kn, c0, ks, vert);
+    float f = selfFirst ? flux(c0, ks, ch, n0, kn, nch, vert) : flux(n0, kn, nch, c0, ks, ch, vert);
     // positive out = water leaving this cell
     float out_ = selfFirst ? f : -f;
     if (out_ > 0.0) {
@@ -94,10 +105,20 @@ void main() {
   float m = nM * settle; vec3 pc = nP * settle;
   o0 = vec4(nW, nM - m, D + m, H);
   o1 = vec4(nP - pc, kx);
-  o2 = vec4(DC + pc, ky);
+  o2 = vec4(DC + pc, kyv);
 }`;
 
-const ADD = HEAD + OUT3 + `
+// Water lifts some dried paint back into suspension (shared by ADD and REWET).
+const LIFT_FN = `
+uniform sampler2D tC;
+uniform vec3 paperCol;
+uniform float redissolve, absorb;
+vec3 liftOf(vec3 C, float w) {
+  float f = min(1.0, w) * redissolve;
+  return -log(max(C / paperCol, vec3(0.02))) * f;
+}`;
+
+const ADD = HEAD + OUT3 + LIFT_FN + `
 uniform sampler2D tw, tm, tc;
 uniform float waterScale, massScale;
 void main() {
@@ -106,9 +127,34 @@ void main() {
   float w = texelFetch(tw, p, 0).a * waterScale;
   float m = texelFetch(tm, p, 0).a * massScale;
   vec3 col = texelFetch(tc, p, 0).rgb;
-  o0 = vec4(c0.x + w, c0.y + m, c0.z, c0.w);
-  o1 = vec4(c1.xyz + col * m, c1.w);
+  vec3 P = c1.xyz + col * m;
+  float M = c0.y + m;
+  if (w > 0.0 && redissolve > 0.0) {
+    vec3 l = liftOf(texelFetch(tC, p, 0).rgb, w);
+    float lm = (l.x + l.y + l.z) / 3.0 / absorb;
+    if (lm > 1e-4) { M += lm; P += lm * exp(-l / (lm * absorb)); }
+  }
+  o0 = vec4(c0.x + w, M, c0.z, c0.w);
+  o1 = vec4(P, c1.w);
   o2 = c2;
+}`;
+
+const REWET = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+` + LIFT_FN + `
+uniform sampler2D tw;
+uniform float waterScale;
+out vec4 o;
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec3 C = texelFetch(tC, p, 0).rgb;
+  float w = texelFetch(tw, p, 0).a * waterScale;
+  if (w > 0.0 && redissolve > 0.0) {
+    vec3 l = liftOf(C, w);
+    if ((l.x + l.y + l.z) / 3.0 / absorb > 1e-4) C = min(paperCol, C * exp(l));
+  }
+  o = vec4(C, 1.0);
 }`;
 
 const LIFT = HEAD + OUT3 + `
@@ -231,7 +277,7 @@ export class GpuWetSim {
 
     this.progs = {
       step: program(gl, STEP), add: program(gl, ADD), lift: program(gl, LIFT),
-      glaze: program(gl, GLAZE), clear: program(gl, CLEAR), op: program(gl, CANVAS_OP), show: program(gl, SHOW),
+      glaze: program(gl, GLAZE), rewet: program(gl, REWET), clear: program(gl, CLEAR), op: program(gl, CANVAS_OP), show: program(gl, SHOW),
     };
     this.vao = gl.createVertexArray();
 
@@ -241,7 +287,7 @@ export class GpuWetSim {
     for (let i = 0; i < N; i++) {
       d0[i * 4 + 3] = paper.H[i];
       d1[i * 4 + 3] = Math.max(0.05, 1 + f * (paper.nx[i] - 0.5) * 2.4);
-      d2[i * 4 + 3] = Math.max(0.05, 1 + f * (paper.ny[i] - 0.5) * 2.4);
+      d2[i * 4 + 3] = Math.max(0.05, 1 + f * (paper.ny[i] - 0.5) * 2.4) + (paper.chan && paper.chan[i] ? 10 : 0);
       dc[i * 4] = this.paperColour[0]; dc[i * 4 + 1] = this.paperColour[1]; dc[i * 4 + 2] = this.paperColour[2]; dc[i * 4 + 3] = 1;
     }
     this.state = [this._stateSet([d0, d1, d2]), this._stateSet([d0, d1, d2])];
@@ -331,7 +377,13 @@ export class GpuWetSim {
   addMarks(water, mass, colour, waterScale = 2, massScale = 1.5) {
     const [tw, tm, tc] = this.markTex;
     this._upload(tw, water); this._upload(tm, mass); this._upload(tc, colour);
-    this._swap(this.progs.add, { tw, tm, tc }, { waterScale, massScale });
+    const rw = { waterScale, massScale, redissolve: this.p.redissolve || 0, absorb: this.p.absorb, paperCol: this.paperColour };
+    this._swap(this.progs.add, { tw, tm, tc, tC: this.C[this.cC].tex }, rw);
+    if (rw.redissolve > 0) {
+      const next = 1 - this.cC;
+      this._pass(this.progs.rewet, this.C[next].fb, { tw, tC: this.C[this.cC].tex }, rw);
+      this.cC = next;
+    }
   }
 
   lift(mask, amount) {

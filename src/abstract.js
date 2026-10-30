@@ -272,7 +272,8 @@ export function buildAbstract(W, H, series, seed, place = '', opts = {}) {
     if (!h.isDay) c = mix(c, NIGHT_INK, 0.4);
     let [hh, ss, ll] = toHsl(c);
     hh += hueShift; ss *= satShift;
-    if (medium === 'ink') { ss = Math.min(1, ss * 1.4 + 0.1); ll = Math.min(0.8, ll * 1.05); }
+    if (medium === 'ink') { ss = Math.min(1, ss * 1.3 + 0.08); }
+    if (medium === 'watercolour') { ss = Math.min(1, ss * 1.35 + 0.08); }
     if (medium === 'gouache') ll = Math.min(0.92, ll * 1.06);
     return fromHsl([hh, clamp(ss), clamp(ll)]);
   };
@@ -298,19 +299,25 @@ export function buildAbstract(W, H, series, seed, place = '', opts = {}) {
           const y = (k / 17) * sh, ang = (gR() - 0.5) * 0.3;
           const pts = [];
           for (let s2 = 0; s2 <= 30; s2++) pts.push([-10 + (s2 / 30) * (sw + 20), y + Math.sin(ang) * (s2 / 30) * sw * 0.2 + (gR() - 0.5) * 3]);
-          sim.stroke(pts, sh / 11, mix(cols[Math.floor(gR() * cols.length)], avg, 0.6), 2, gR);
+          const [gh, gs] = toHsl(avg);
+          const ground = fromHsl([gh, Math.min(1, gs * 1.6 + 0.25), 0.52]);
+          sim.stroke(pts, sh / 11, mix(ground, cols[Math.floor(gR() * cols.length)], 0.12), 2.4, gR);
         }
         sim.finishLayer();
       } else {
         const G = new Marks(sw, sh);
         const all = new Path2D(); all.rect(0, 0, sw, sh);
-        G.paint(all, 1.1, 0.34 * L.colour, mix(avg, paperCol, 0.1));
+        if (medium === 'ink') G.paint(all, 1.1, 0.9 * L.colour, inkTone(avg, 0.32));
+        else G.paint(all, medium === 'gouache' ? 1.6 : 1.1, 0.34 * L.colour, mix(avg, paperCol, 0.1));
         for (let k = 0; k < 10; k++) {
           const r = su * (0.25 + gR() * 0.35);
           G.paint(shapePath(gR, gR() * sw, gR() * sh, r, r * (0.5 + gR() * 0.5), gR() * TAU), 0.2, (0.12 + gR() * 0.18) * L.colour, cols[Math.floor(gR() * cols.length)]);
         }
+        const keep = sim.p;
+        if (medium === 'gouache') sim.p = { ...MEDIA.watercolour, wetFront: 0.4, hide: 1.4, absorb: 0.7, redissolve: 0 };
         G.apply(sim);
-        sim.finishLayer(Math.round(1.6 / P.evap) + 20);
+        sim.finishLayer(Math.round(1.6 / sim.p.evap) + 20);
+        sim.p = keep;
       }
       for (let li = 0; li < n; li++) {
         if (sc.cancelled) return;
@@ -320,6 +327,8 @@ export function buildAbstract(W, H, series, seed, place = '', opts = {}) {
         const col = colourOf(h);
         const recent = li >= n - 3;
         if (engine === 'oil') paintOilLayer(sim, R, h, col, { sw, sh, su, S, L, density, fresh, recent, sc, toOut });
+        else if (medium === 'gouache') paintGouacheLayer(sim, R, h, col, { sw, sh, su, S, L, P, density, fresh, recent, sc, toOut });
+        else if (medium === 'ink') paintInkLayer(sim, R, h, col, { sw, sh, su, S, L, P, density, fresh, recent, sc, toOut });
         else paintWetLayer(sim, R, h, col, { sw, sh, su, S, L, P, density, fresh, recent, sc, toOut, medium, colourOf });
         if (li % 2 === 1 || li === n - 1) sim.drawTo(bctx, W, H);
         sc.progress = (li + 1) / n;
@@ -386,6 +395,17 @@ function paintWetLayer(sim, R, h, col, ctx) {
     A.paint(shapePath(R, x, y, r, r * (0.85 + R() * 0.3), R() * TAU, 0.7), 1.0, 0.42 * strength * L.sun * Math.max(0.35, fresh), GOLD);
     if (recent) sc.lastSun = { pos: toOut(x, y), r: (r / sw) * sc.W };
   }
+  // spatter flicked off the brush: tiny pools of concentrated paint
+  const spatter = (M, n, wet) => {
+    for (let k = 0; k < n; k++) {
+      const wsh = washes.length ? washes[Math.floor(R() * washes.length)] : { x: R() * sw, y: R() * sh, r: su * 0.2, sq: 1 };
+      const a = R() * TAU, d = wsh.r * (0.6 + R() * R() * 2.2);
+      const x = wsh.x + Math.cos(a) * d, y = wsh.y + Math.sin(a) * d * wsh.sq;
+      const r = su * (0.002 + R() * R() * 0.012) * S;
+      M.paint(shapePath(R, x, y, r, r * (0.8 + R() * 0.4), R() * TAU, 0.6), wet, (0.6 + R() * 0.6) * L.colour * Math.max(0.5, fresh), col);
+    }
+  };
+  if (L.colour > 0) spatter(A, Math.round((10 + Math.min(h.precip, 8) * 6) * density), 1.0);
   A.apply(sim);
   sim.run(14 + Math.round(R() * 10));
 
@@ -411,6 +431,7 @@ function paintWetLayer(sim, R, h, col, ctx) {
       B.paint(shapePath(R, x, y, r, r, 0, 1.2), 1.2, 0, col);
     }
   }
+  if (rain && L.colour > 0) spatter(B, Math.round(Math.min(h.precip, 8) * 4 * density), 0.9);
   B.apply(sim);
   sim.finishLayer(Math.round((1.5 + (rain ? 2.1 : 0)) / P.evap) + 30);
 
@@ -459,66 +480,233 @@ function paintWetLayer(sim, R, h, col, ctx) {
   }
 }
 
+// Deep ink tinted by the weather.
+function inkTone(c, light) {
+  const [hh, ss, ll] = toHsl(c);
+  return fromHsl([hh, Math.min(1, ss * 1.1 + 0.05), light]);
+}
+
+// Ink: lay a dark wash, then pour water into it while it's wet. The water pushes
+// the ink outwards, leaving pale shapes with hard dark tide lines.
+function paintInkLayer(sim, R, h, col, ctx) {
+  const { sw, sh, su, S, L, P, density, fresh, recent, sc } = ctx;
+  const rain = isRain(h);
+  sim.gravity = P.gravity * (1 + Math.min(h.precip, 6) * 0.3);
+  const to = ((h.windDir + 180) * Math.PI) / 180;
+  const windAmt = Math.min(h.wind, 60) / 60 * 0.015 * L.wind;
+  sim.wind = [Math.sin(to) * windAmt, -Math.cos(to) * windAmt];
+
+  const A = new Marks(sw, sh);
+  const pools = [];
+  const heavy = rain || !h.isDay || h.cloud > 60;
+  if (L.colour > 0 && (heavy || R() < 0.35)) {
+    const count = Math.max(1, Math.round((0.6 + R() * 1.2) * density));
+    for (let k = 0; k < count; k++) {
+      const r = su * (0.18 + R() * 0.3) * S;
+      const x = R() * sw, y = R() * sh, rot = R() * TAU, sq = 0.4 + R() * 0.6;
+      A.paint(shapePath(R, x, y, r, r * sq, rot, 1.2), 1.2 + R() * 0.4, (0.8 + R() * 0.5) * L.colour * Math.max(0.45, fresh), inkTone(col, 0.18 + R() * 0.12));
+      pools.push({ x, y, r, sq, rot });
+    }
+  }
+  A.apply(sim);
+  sim.run(8 + Math.round(R() * 6));
+
+  // pours of clean (faintly tinted) water into the wet ink
+  const B = new Marks(sw, sh);
+  const pale = mix(inkTone(col, 0.82), [250, 240, 230], 0.3);
+  const pours = Math.max(1, Math.round((1 + (h.cloud < 60 ? 1 : 0) + (rain ? Math.min(h.precip, 6) * 0.6 : 0)) * density * 0.8));
+  for (let k = 0; k < pours; k++) {
+    const pl = pools.length && R() < 0.5 ? pools[Math.floor(R() * pools.length)] : { x: R() * sw, y: R() * sh, r: su * (0.2 + R() * 0.25) * S, sq: 0.5 + R() * 0.5 };
+    const big = R() < 0.5;
+    const r = pl.r * (big ? 0.45 + R() * 0.3 : 0.08 + R() * 0.15);
+    const x = pl.x + (R() - 0.5) * pl.r, y = pl.y + (R() - 0.5) * pl.r * pl.sq;
+    B.paint(shapePath(R, x, y, r, r * (0.5 + R() * 0.6), R() * TAU, 1.3), 2.2 + R() * 0.5, 0.05 * Math.max(0.5, fresh), pale);
+  }
+  B.apply(sim);
+  sim.finishLayer(Math.round(3.2 / P.evap) + 30);
+
+  // sunny hours: loops bleached back out of the ink
+  if (L.sun > 0 && h.isDay && !rain && h.cloud < 50 && R() < 0.22) {
+    const m = maskCanvas(sw, sh);
+    const x = R() * sw, y = R() * sh, petals = 5 + Math.floor(R() * 4), size = su * (0.1 + R() * 0.1) * S;
+    m.g.strokeStyle = '#fff'; m.g.lineWidth = Math.max(0.8, su * 0.004); m.g.lineCap = 'round';
+    for (let k = 0; k < petals; k++) {
+      const a = (k / petals) * TAU + R() * 0.3, len = size * (0.7 + R() * 0.6);
+      m.g.beginPath();
+      m.g.moveTo(x, y);
+      m.g.bezierCurveTo(x + Math.cos(a - 0.5) * len * 1.2, y + Math.sin(a - 0.5) * len * 1.2, x + Math.cos(a + 0.5) * len * 1.2, y + Math.sin(a + 0.5) * len * 1.2, x, y);
+      m.g.stroke();
+    }
+    m.g.fillStyle = '#fff';
+    for (let k = 0; k < 8; k++) { m.g.beginPath(); m.g.arc(x + (R() - 0.5) * size * 0.5, y + (R() - 0.5) * size * 0.5, R() * su * 0.006, 0, TAU); m.g.fill(); }
+    sim.liftDryMask(m.c, 0.9 * Math.min(1, L.sun) * (1 - h.cloud / 120));
+  }
+  // wind: a fine dark pen line drawn with the wind
+  if (L.wind > 0 && h.wind > 15) {
+    const m = maskCanvas(sw, sh);
+    let x = R() * sw, y = R() * sh;
+    const dx = Math.sin(to), dy = -Math.cos(to);
+    m.g.strokeStyle = rgba(inkTone(col, 0.12)); m.g.lineWidth = Math.max(0.7, su * 0.003); m.g.lineJoin = 'round';
+    m.g.beginPath(); m.g.moveTo(x, y);
+    for (let k = 0; k < 6; k++) { x += dx * su * 0.08 + (R() - 0.5) * su * 0.06; y += dy * su * 0.08 + (R() - 0.5) * su * 0.06; m.g.lineTo(x, y); }
+    m.g.stroke();
+    sim.dabMask(m.c, 0.8 * Math.min(1, L.wind));
+  }
+  if (rain && recent) {
+    for (let k = 0; k < 2; k++) { const pl = pools[Math.floor(R() * pools.length)] || { x: R() * sw, y: R() * sh }; sc.drops.push({ pos: ctx.toOut(pl.x, pl.y), cell: sc.W / sw, col: inkTone(col, 0.25), rainCol: mix(RAIN_INK, col, 0.4), seed: Math.floor(R() * 1e9) }); }
+  }
+}
+
+// Gouache: soft blended veils, then directional dabs that drag into dry-brush tails,
+// gold squiggles for sun and dark blots for rain.
+function paintGouacheLayer(sim, R, h, col, ctx) {
+  const { sw, sh, su, S, L, P, density, fresh, recent, sc } = ctx;
+  const rain = isRain(h);
+  const to = ((h.windDir + 180) * Math.PI) / 180;
+  const theta = Math.atan2(-Math.cos(to), Math.sin(to));        // screen angle the wind blows towards
+  sim.gravity = 0;
+  sim.wind = [0, 0];
+  const dark = inkTone(col, 0.2);
+
+  const A = new Marks(sw, sh);
+  if (L.colour > 0 && R() < 0.7) {
+    const r = su * (0.2 + R() * 0.3) * S;
+    A.paint(shapePath(R, R() * sw, R() * sh, r, r * (0.5 + R() * 0.4), R() * TAU, 0.8), 1.5, 0.3 * L.colour * Math.max(0.5, fresh), mix(col, [250, 244, 232], 0.15));
+  }
+  if (L.cloud > 0 && h.cloud > 40) {
+    const r = su * (0.15 + R() * 0.2) * S;
+    A.paint(shapePath(R, R() * sw, R() * sh, r * 1.5, r * 0.6, theta + (R() - 0.5) * 0.4, 0.8), 1.4, 0.18 * L.cloud, mix(col, [245, 240, 232], 0.6));
+  }
+  // directional dabs: a loaded head that trails off in the wind's direction
+  const dabs = Math.round((1.5 + Math.min(h.wind, 50) / 12) * density * L.colour);
+  const tails = [];
+  for (let k = 0; k < dabs; k++) {
+    const x = R() * sw, y = R() * sh, a = theta + (R() - 0.5) * 0.7, len = su * (0.03 + R() * 0.07) * S, wdt = len * (0.25 + R() * 0.3);
+    const path = new Path2D();
+    for (let j = 0; j <= 24; j++) {
+      const t = (j / 24) * TAU;
+      const along = Math.cos(t) * len, across = Math.sin(t) * wdt * (Math.cos(t) > 0 ? 1 : 0.55);
+      const X = x + along * Math.cos(a) - across * Math.sin(a), Y = y + along * Math.sin(a) + across * Math.cos(a);
+      j ? path.lineTo(X, Y) : path.moveTo(X, Y);
+    }
+    A.paint(path, 1.3, (0.8 + R() * 0.5) * Math.max(0.55, fresh), dark);
+    tails.push({ x, y, a, len, wdt });
+  }
+  if (rain && L.rain > 0) {
+    for (let k = 0; k < Math.round(Math.min(h.precip, 8) * 2.5 * density); k++) {
+      const r = su * (0.004 + R() * R() * 0.02) * S;
+      A.paint(shapePath(R, R() * sw, R() * sh, r, r * (0.7 + R() * 0.5), R() * TAU, 0.8), 0.9, 0.9 * L.rain * Math.max(0.6, fresh), dark);
+    }
+  }
+  // painted very wet so veils and dabs soften into each other, then dried as opaque gouache
+  const keep = sim.p;
+  sim.p = { ...MEDIA.watercolour, wetFront: 0.45, edgeEvap: 0, pin: 0, gravity: 0, granulate: 0.004, hide: keep.hide, absorb: keep.absorb, redissolve: keep.redissolve };
+  A.apply(sim);
+  sim.finishLayer(Math.round(1.8 / sim.p.evap) + 20);
+  sim.p = keep;
+
+  // dry-brush tails behind each dab
+  if (tails.length) {
+    const m = maskCanvas(sw, sh);
+    m.g.lineCap = 'round';
+    for (const t of tails) {
+      for (let b = 0; b < 4; b++) {
+        const off = (R() - 0.5) * t.wdt * 1.4, tl = t.len * (1.5 + R() * 2.5);
+        for (let s2 = 0; s2 < 10; s2++) {
+          const u0 = s2 / 10, u1 = (s2 + 1) / 10;
+          m.g.strokeStyle = `rgba(0,0,0,${0.85 - u0 * 0.8})`;
+          m.g.lineWidth = Math.max(0.6, t.wdt * 0.35 * (1 - u0 * 0.6));
+          const bx = t.x - Math.cos(t.a) * t.len * 0.6 - Math.sin(t.a) * off, by = t.y - Math.sin(t.a) * t.len * 0.6 + Math.cos(t.a) * off;
+          m.g.beginPath();
+          m.g.moveTo(bx - Math.cos(t.a) * tl * u0, by - Math.sin(t.a) * tl * u0);
+          m.g.lineTo(bx - Math.cos(t.a) * tl * u1, by - Math.sin(t.a) * tl * u1);
+          m.g.stroke();
+        }
+      }
+    }
+    sim.dryBrushMask(m.c, dark, 0.75);
+  }
+  // sun: thin gold squiggles
+  if (L.sun > 0 && h.isDay && !rain && h.cloud < 75) {
+    const m = maskCanvas(sw, sh);
+    m.g.lineCap = 'round'; m.g.lineJoin = 'round';
+    const n = 1 + Math.round(R() * 2);
+    for (let k = 0; k < n; k++) {
+      let x = R() * sw, y = R() * sh;
+      const pts = [[x, y]];
+      for (let j = 0; j < 7; j++) { x += (R() - 0.5) * su * 0.05; y += (R() - 0.3) * su * 0.04; pts.push([x, y]); }
+      for (const [colr, wdt] of [['rgb(206,158,52)', Math.max(1, su * 0.004)], ['rgb(250,222,140)', Math.max(0.6, su * 0.0018)]]) {
+        m.g.strokeStyle = colr; m.g.lineWidth = wdt;
+        m.g.beginPath(); m.g.moveTo(pts[0][0], pts[0][1]);
+        for (let j = 1; j < pts.length - 1; j++) m.g.quadraticCurveTo(pts[j][0], pts[j][1], (pts[j][0] + pts[j + 1][0]) / 2, (pts[j][1] + pts[j + 1][1]) / 2);
+        m.g.stroke();
+      }
+    }
+    sim.dabMask(m.c, 0.95 * Math.min(1, L.sun));
+  }
+  if (rain && recent) for (let k = 0; k < 2; k++) sc.drops.push({ pos: ctx.toOut(R() * sw, R() * sh), cell: sc.W / sw, col, rainCol: mix(RAIN_INK, col, 0.4), seed: Math.floor(R() * 1e9) });
+}
+
+// Oil: a few loose marks per hour on a saturated ground. Scumbled light shapes,
+// thick yellow impasto for sun, tall strokes for rain, thin contrasting lines for wind.
 function paintOilLayer(sim, R, h, col, ctx) {
   const { sw, sh, su, S, L, density, fresh, recent, sc } = ctx;
   const rain = isRain(h), snow = isSnow(h);
-  const curve = (x, y, ang, len, bend) => {
-    const pts = [];
-    for (let s = 0; s <= 24; s++) {
-      const t = s / 24 - 0.5;
-      pts.push([x + Math.cos(ang) * len * t - Math.sin(ang) * bend * (t * t * 4 - 1), y + Math.sin(ang) * len * t + Math.cos(ang) * bend * (t * t * 4 - 1)]);
+  const [hh, ss] = toHsl(col);
+  const wobble = (x, y, ang, len, amp, n = 20) => {
+    const pts = [], ph = R() * TAU;
+    for (let k = 0; k <= n; k++) {
+      const t = k / n;
+      const off = Math.sin(t * Math.PI * (1.5 + R() * 0.2) + ph) * amp;
+      pts.push([x + Math.cos(ang) * len * t - Math.sin(ang) * off, y + Math.sin(ang) * len * t + Math.cos(ang) * off]);
     }
     return pts;
   };
-  if (L.colour > 0) {
-    const count = Math.max(1, Math.round((2 + R() * 2) * density));
-    for (let k = 0; k < count; k++) {
-      const x = R() * sw, y = R() * sh, r = su * (0.15 + R() * 0.25) * S, ang = R() * Math.PI;
-      const strokes = 4 + Math.floor(R() * 4);
-      for (let j = 0; j < strokes; j++) {
-        const off = (j / (strokes - 1 || 1) - 0.5) * r * 1.2;
-        sim.stroke(curve(x - Math.sin(ang) * off, y + Math.cos(ang) * off, ang + (R() - 0.5) * 0.25, r * (1.4 + R() * 0.6), (R() - 0.5) * r * 0.3),
-          Math.max(2, r * (0.18 + R() * 0.12)), col, 1.4 * L.colour * Math.max(0.5, fresh), R);
-      }
+  const sparse = Math.max(0.25, density * 0.6);
+
+  // scumbled light shapes
+  if (L.colour > 0 && R() < 0.55 * sparse + 0.15) {
+    const x = R() * sw, y = R() * sh, r = su * (0.06 + R() * 0.1) * S, ang = -Math.PI / 2 + (R() - 0.5) * 1.6;
+    const light = fromHsl([hh, Math.min(1, ss * 0.8 + 0.1), 0.78]);
+    for (let j = 0; j < 4; j++) {
+      sim.stroke(wobble(x + (R() - 0.5) * r, y + (R() - 0.5) * r, ang + (R() - 0.5) * 0.5, r * (1.6 + R()), r * 0.2), Math.max(2, r * (0.3 + R() * 0.2)), light, (0.7 + R() * 0.6) * L.colour * Math.max(0.6, fresh), R);
     }
   }
-  if (L.cloud > 0 && h.cloud > 35) {
-    const c = h.isDay ? [200, 202, 212] : [90, 92, 120];
-    for (let k = 0; k < Math.round((h.cloud / 40) * density); k++) {
-      const x = R() * sw, y = R() * sh, r = su * (0.1 + R() * 0.15) * S;
-      sim.stroke(curve(x, y, (R() - 0.5) * 0.4, r * 2.4, r * 0.2), Math.max(1.5, r * 0.18), c, 0.6 * L.cloud, R);
-    }
+  if (L.cloud > 0 && h.cloud > 45 && R() < 0.5 * sparse) {
+    const x = R() * sw, y = R() * sh, r = su * (0.08 + R() * 0.1) * S;
+    sim.stroke(wobble(x, y, (R() - 0.5) * 0.4, r * 3, r * 0.15), Math.max(2, r * 0.4), [232, 230, 236], 0.25 * L.cloud, R);
   }
-  if (L.sun > 0 && h.isDay && !rain && h.cloud < 75) {
-    const strength = 1 - h.cloud / 100, x = R() * sw, y = R() * sh, r = su * (0.04 + strength * 0.06) * S;
-    for (let ring = 0; ring < 3; ring++) {
-      const pts = [], rr = r * (0.4 + ring * 0.35), a0 = R() * TAU;
-      for (let s = 0; s <= 30; s++) { const a = a0 + (s / 30) * TAU * 0.9; pts.push([x + Math.cos(a) * rr, y + Math.sin(a) * rr]); }
-      sim.stroke(pts, Math.max(1.5, r * 0.3), mix(GOLD, [255, 230, 150], ring * 0.2), 1.1 * strength * L.sun, R);
-    }
-  }
+  // rain: tall strokes, a little unsteady
   if (rain && L.rain > 0) {
-    const slant = Math.sin(((h.windDir + 180) * Math.PI) / 180) * Math.min(h.wind, 50) / 100;
-    for (let k = 0; k < Math.round((3 + Math.min(h.precip, 10) * 3) * density * L.rain); k++) {
-      const x = R() * sw, y = R() * sh, len = su * (0.05 + R() * 0.12) * (0.7 + Math.min(h.precip, 6) / 6);
-      sim.stroke([[x, y], [x + slant * len * 0.5, y + len * 0.5], [x + slant * len, y + len]], 1 + R() * 1.6, mix(RAIN_INK, col, 0.3), 0.7, R);
+    const deep = fromHsl([hh + 10, Math.min(1, ss * 1.4 + 0.3), 0.36]);
+    for (let k = 0; k < Math.max(1, Math.round(Math.min(h.precip, 8) * 0.6 * sparse)); k++) {
+      const x = R() * sw, y = sh * (0.25 + R() * 0.75), len = su * (0.2 + R() * 0.35);
+      sim.stroke(wobble(x, y, -Math.PI / 2 + (R() - 0.5) * 0.15, len, su * 0.006), 1.2 + R() * 1.8, deep, 1.6 * L.rain, R);
     }
   }
-  if (L.wind > 0 && h.wind > 18) {
-    const to = ((h.windDir + 180) * Math.PI) / 180, ang = Math.atan2(-Math.cos(to), Math.sin(to));
-    for (let k = 0; k < Math.round(((h.wind - 12) / 10) * density); k++) {
-      const x = R() * sw, y = R() * sh, len = su * (0.25 + R() * 0.3) * S;
-      sim.stroke(curve(x, y, ang, len, (R() - 0.5) * len * 0.1), 1.5 + R() * 2, mix(col, [250, 248, 240], 0.5), 0.25 * L.wind, R);
+  // sun: thick yellow impasto dabs
+  if (L.sun > 0 && h.isDay && !rain && h.cloud < 75 && R() < 0.7) {
+    const x = R() * sw, y = R() * sh;
+    for (let k = 0; k < 4 + Math.floor(R() * 4); k++) {
+      const a = R() * TAU, d = su * R() * 0.025;
+      const px = x + Math.cos(a) * d, py = y + Math.sin(a) * d * 2;
+      sim.stroke([[px, py], [px + (R() - 0.5) * 3, py + 2 + R() * 3]], 1.2 + R() * 1.3, [238, 186 + R() * 20, 40], 3 * L.sun, R);
     }
+  }
+  // wind: a thin line in a contrasting colour
+  if (L.wind > 0 && h.wind > 14 && R() < 0.6) {
+    const contrast = fromHsl([hh + 170, 0.55, 0.68]);
+    const to = ((h.windDir + 180) * Math.PI) / 180, ang = Math.atan2(-Math.cos(to), Math.sin(to));
+    sim.stroke(wobble(R() * sw, R() * sh, ang + (R() - 0.5) * 0.8, su * (0.15 + R() * 0.2), su * 0.03, 30), 1 + R() * 0.6, contrast, 1.3 * L.wind, R);
   }
   sim.finishLayer();
-  if (snow || (!h.isDay && h.cloud < 50)) {
+  if (snow || (!h.isDay && h.cloud < 50 && R() < 0.5)) {
     const m = maskCanvas(sw, sh);
     m.g.fillStyle = '#fffaf0';
-    for (let k = 0; k < Math.round((snow ? 40 : 12) * density); k++) { m.g.beginPath(); m.g.arc(R() * sw, R() * sh, 0.8 + R() * 1.8, 0, TAU); m.g.fill(); }
-    sim.dabMask(m.c, 0.95);
+    for (let k = 0; k < Math.round((snow ? 20 : 6) * sparse); k++) { m.g.beginPath(); m.g.arc(R() * sw, R() * sh, 0.8 + R() * 1.6, 0, TAU); m.g.fill(); }
+    sim.dabMask(m.c, 0.9);
   }
-  if (rain && recent) for (let k = 0; k < 3; k++) sc.drops.push({ pos: ctx.toOut(R() * sw, R() * sh), cell: sc.W / sw, col, rainCol: mix(RAIN_INK, col, 0.4), seed: Math.floor(R() * 1e9) });
+  if (rain && recent) sc.drops.push({ pos: ctx.toOut(R() * sw, R() * sh), cell: sc.W / sw, col, rainCol: mix(RAIN_INK, col, 0.4), seed: Math.floor(R() * 1e9) });
 }
 
 // Simulate one drop landing in a damp wash, frame by frame, for the animation.
@@ -655,7 +843,7 @@ export function paintAbstract(ctx, sc, p, { caption = null, grain = 1 } = {}) {
   if (grain) {
     ctx.save();
     ctx.globalCompositeOperation = 'multiply';
-    ctx.globalAlpha = (sc.medium === 'oil' ? 0.35 : sc.medium === 'gouache' ? 0.15 : 0.22) * grain;
+    ctx.globalAlpha = (sc.medium === 'oil' ? 0.12 : sc.medium === 'gouache' ? 0.12 : 0.22) * grain;
     ctx.fillStyle = ctx.createPattern(sc.paperTile, 'repeat');
     ctx.fillRect(0, 0, W, H);
     ctx.restore();
